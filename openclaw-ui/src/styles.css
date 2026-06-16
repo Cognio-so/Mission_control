@@ -288,6 +288,19 @@ button:disabled{cursor:not-allowed}
 }
 .scope-note{margin:16px 4px 0;border-style:solid;background:#fff}
 .scope-note span,.hint span,.hint b{font-family:var(--mono)}
+.agent-status{
+  margin:10px 0 2px;
+  border:1px solid var(--line);
+  border-radius:var(--r-sm);
+  background:#fff;
+  padding:9px 10px;
+  color:var(--muted);
+  font-size:12px;
+  line-height:1.45;
+}
+.agent-status.pending{border-color:#f3d79c;background:var(--amber-soft);color:#92400e}
+.agent-status.ok{border-color:#bae6c4;background:var(--green-soft);color:var(--green)}
+.agent-status.error,.error-mini{border-color:#fecdd3;background:var(--rose-soft);color:var(--rose)}
 
 .chat-head{
   height:70px;

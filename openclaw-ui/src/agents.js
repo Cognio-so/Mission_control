@@ -6,6 +6,15 @@ let _seq = 0
 export const newId = (prefix = 'agent') =>
   prefix + '_' + (Date.now().toString(36) + (++_seq).toString(36)).toLowerCase()
 
+export function slugAgentId(name) {
+  const slug = String(name || '')
+    .trim()
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/g, '_')
+    .replace(/^_+|_+$/g, '')
+  return slug || newId('agent')
+}
+
 export function fallbackOrchestrator() {
   return {
     id: ORCH_ID,
@@ -36,6 +45,10 @@ export function normalizeAgent(agent, mainSession = 'main') {
     managedByOrchestrator: isOrch ? false : base.managedByOrchestrator !== false,
     builtin: isOrch ? true : !!base.builtin,
     pinned: isOrch ? true : !!base.pinned,
+    // live presence reported by the broker, if any (online | busy | offline | …)
+    status: base.status ? String(base.status) : (base.presence ? String(base.presence) : null),
+    skills: Array.isArray(base.skills) ? base.skills : [],
+    tools: Array.isArray(base.tools) ? base.tools : [],
     createdAt: base.createdAt || Date.now(),
     updatedAt: base.updatedAt || base.createdAt || Date.now(),
   }
@@ -82,14 +95,15 @@ export function resolveAgentId(sessionMap, sessionKey) {
 }
 
 export function newAgentTemplate() {
-  const id = newId('agent')
   return {
-    id,
+    id: '',
     name: '',
     icon: 'AI',
     role: '',
     instructions: '',
     sessionKey: '',
+    skills: [],
+    tools: [],
     managedByOrchestrator: true,
     builtin: false,
     pinned: false,
