@@ -23,7 +23,7 @@ export default function DashboardPage() {
   const connLive = state.conn === 'live' || state.conn === 'demo'
 
   return (
-    <PageLayout kicker="Overview" title="Mission Control" description="Your command center for OpenClaw agents — coordinate runs, manage skills, and track work across boards." wide>
+    <PageLayout kicker="Overview" title="Mission Control" description="Your command center for Cognio agents — coordinate runs, manage skills, and track work across boards." wide>
       {/* hero banner */}
       <motion.div initial={{ opacity: 0, y: 12 }} animate={{ opacity: 1, y: 0 }}
         className="mb-6 overflow-hidden rounded-3xl bg-gradient-to-br from-slate-900 via-slate-900 to-blue-950 p-7 text-white shadow-lg">

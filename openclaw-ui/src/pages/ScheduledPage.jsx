@@ -24,7 +24,7 @@ export default function ScheduledPage() {
     <PageLayout
       kicker="Operations"
       title="Scheduled jobs"
-      description="Cron jobs OpenClaw runs on a schedule — recurring agent runs, audits, and digests."
+      description="Cron jobs Cognio runs on a schedule — recurring agent runs, audits, and digests."
       actions={<SourceBadge source={source} />}
       wide
     >

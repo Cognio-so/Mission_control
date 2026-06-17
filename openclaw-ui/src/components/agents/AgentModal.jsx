@@ -4,6 +4,7 @@ import { ORCH_ID, slugAgentId } from '../../agents.js'
 import { initials } from '../../lib/utils.js'
 import { Api, useApi } from '../../lib/api.js'
 import { cn } from '../../lib/utils.js'
+import { useMission } from '../../store/mission.jsx'
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogDescription, DialogFooter } from '../ui/dialog.jsx'
 import { Button } from '../ui/button.jsx'
 import { Input } from '../ui/input.jsx'
@@ -21,6 +22,13 @@ export function AgentModal({ entry, onSave, onDelete, onClose, saving }) {
   const [toolInput, setToolInput] = useState('')
   const [skillQuery, setSkillQuery] = useState('')
   const { data: allSkills } = useApi(() => Api.skills(), [])
+
+  // team / hierarchy: where this agent reports. '__new__' = make it a new orchestrator/team.
+  const mission = useMission()
+  const orchestrators = (mission?.agents || []).filter((a) => a.kind === 'orchestrator')
+  const [reportsTo, setReportsTo] = useState(
+    entry.agent.kind === 'orchestrator' ? '__new__' : entry.agent.parentId || ORCH_ID,
+  )
 
   const draft = async () => {
     setDrafting(true); setDraftErr('')
@@ -48,6 +56,11 @@ export function AgentModal({ entry, onSave, onDelete, onClose, saving }) {
 
   const save = () => {
     if (!valid) return
+    const isNewOrch = reportsTo === '__new__'
+    const parent = orchestrators.find((o) => o.id === reportsTo)
+    const kind = isOrch || isNewOrch ? 'orchestrator' : 'specialist'
+    const team = isOrch ? (f.team || f.name.trim()) : isNewOrch ? f.name.trim() : parent?.team || parent?.name || ''
+    const parentId = kind === 'orchestrator' ? null : reportsTo
     onSave(
       {
         ...f,
@@ -56,6 +69,8 @@ export function AgentModal({ entry, onSave, onDelete, onClose, saving }) {
         instructions: (f.instructions || '').trim(),
         icon: initials(f.name.trim()),
         skills: f.skills, tools: f.tools,
+        kind, team, parentId,
+        managedByOrchestrator: kind === 'specialist',
         sessionKey: isOrch ? '' : (f.sessionKey || '').trim() || 'agent_' + f.id,
       },
       entry.mode,
@@ -100,6 +115,25 @@ export function AgentModal({ entry, onSave, onDelete, onClose, saving }) {
 
           {!isOrch && (
             <>
+              {/* Team / reports to */}
+              <div>
+                <span className="mb-1.5 block text-xs font-semibold uppercase tracking-wide text-slate-500">Team</span>
+                <select
+                  value={reportsTo} onChange={(e) => setReportsTo(e.target.value)}
+                  className="h-11 w-full rounded-xl border border-[color:var(--border)] bg-white px-3 text-sm text-strong focus:outline-none focus:ring-2 focus:ring-[color:var(--accent)]"
+                >
+                  {orchestrators.map((o) => (
+                    <option key={o.id} value={o.id}>↳ Specialist under “{o.team || o.name}” team</option>
+                  ))}
+                  <option value="__new__">⭐ New team — make this an Orchestrator</option>
+                </select>
+                <p className="mt-1 text-[11px] text-slate-400">
+                  {reportsTo === '__new__'
+                    ? 'This agent heads a new team; add specialists under it later.'
+                    : 'This agent reports to the selected orchestrator and appears under its tree.'}
+                </p>
+              </div>
+
               {/* Skills */}
               <div>
                 <span className="mb-1.5 block text-xs font-semibold uppercase tracking-wide text-slate-500">Skills <span className="text-slate-400">({f.skills.length})</span></span>
@@ -162,10 +196,6 @@ export function AgentModal({ entry, onSave, onDelete, onClose, saving }) {
                 />
               </div>
 
-              <label className="flex items-center gap-2 text-sm text-slate-700">
-                <input type="checkbox" className="h-4 w-4 rounded border-slate-300" checked={!!f.managedByOrchestrator} onChange={up('managedByOrchestrator')} />
-                Managed by Orchestrator
-              </label>
               <div className="rounded-xl bg-slate-50 px-4 py-3 text-xs text-slate-500">
                 Backend id <span className="font-mono text-slate-700">{backendId}</span> · Session <span className="font-mono text-slate-700">{f.sessionKey || 'agent_' + backendId}</span>
               </div>

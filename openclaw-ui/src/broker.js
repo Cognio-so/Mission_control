@@ -182,9 +182,13 @@ export class BrokerClient {
     const p = (obj && obj.payload && typeof obj.payload === 'object') ? obj.payload : obj
     if (!p || typeof p !== 'object' || !('state' in p)) return
 
+    // The gateway prefixes session keys (e.g. agent:main:main__x) — the broker now
+    // sends a normalized `brokerSessionKey` (prefix stripped) for exact matching.
+    const sk = p.brokerSessionKey || obj.brokerSessionKey || p.sessionKey
+
     const isChild = !!p.spawnedBy
     if (isChild) {
-      const key = p.sessionKey || ('child_' + (p.runId || ''))
+      const key = sk || ('child_' + (p.runId || ''))
       const parent = this.who(p.spawnedBy) || this.pendingAgent
       if (p.state === 'delta') this.d({ type: 'sub.delta', key, parent, text: p.deltaText || '', replace: p.replace === true })
       else if (p.state === 'final') this.d({ type: 'sub.status', key, status: 'done' })
@@ -192,7 +196,7 @@ export class BrokerClient {
       return
     }
 
-    const agent = this.who(p.sessionKey)
+    const agent = this.who(sk)
     if (p.state === 'delta') {
       this.d({ type: 'assistant.delta', agent, text: p.deltaText || '', replace: p.replace === true })
     } else if (p.state === 'final') {

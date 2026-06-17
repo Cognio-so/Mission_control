@@ -107,7 +107,7 @@ export const DEMO_CRON = [
 ]
 
 export const DEMO_GATEWAYS = [
-  { id: 'am-broker', name: 'AM Broker (cognio)', url: 'wss://am-broker.cognio.so', connected: true, scopes: ['operator.read', 'operator.write'] },
+  { id: 'local-broker', name: 'Local VPS Broker', url: '/api', connected: true, scopes: ['operator.read', 'operator.write'] },
 ]
 
 export const BOARD_COLUMNS = [

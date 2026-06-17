@@ -23,7 +23,7 @@ export default function GatewaysPage() {
     <PageLayout
       kicker="Administration"
       title="Gateways"
-      description="The gateways your broker connects to OpenClaw through. Status reflects the live broker connection."
+      description="The gateways your broker connects to Cognio through. Status reflects the live broker connection."
       actions={<SourceBadge source={source} />}
       wide
     >

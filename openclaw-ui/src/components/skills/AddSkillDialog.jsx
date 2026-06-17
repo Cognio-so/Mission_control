@@ -12,7 +12,7 @@ import { Textarea } from '../ui/textarea.jsx'
 const MODES = [
   { key: 'source', label: 'From source', icon: Link2, hint: 'Install from a Git repo / skill URL.' },
   { key: 'file', label: 'From file', icon: FileCode, hint: 'Paste a skill file — the broker writes it into the gateway.' },
-  { key: 'describe', label: 'Describe', icon: Sparkles, hint: 'Describe what you want — OpenClaw generates the skill.' },
+  { key: 'describe', label: 'Describe', icon: Sparkles, hint: 'Describe what you want — Cognio generates the skill.' },
 ]
 
 export function AddSkillDialog({ onClose, onAdded }) {
@@ -41,7 +41,7 @@ export function AddSkillDialog({ onClose, onAdded }) {
       if (res && res.ok === false) {
         setError(res.error || 'The broker could not add the skill.')
       } else {
-        setOk(res?.message || 'Skill submitted to OpenClaw.')
+        setOk(res?.message || 'Skill submitted to Cognio.')
         onAdded?.()
         setTimeout(() => onClose(), 900)
       }
@@ -59,7 +59,7 @@ export function AddSkillDialog({ onClose, onAdded }) {
       <DialogContent className="max-w-xl">
         <DialogHeader>
           <DialogTitle>Add a skill</DialogTitle>
-          <DialogDescription>Add a capability to OpenClaw from a source, a file, or a description. {activeHint}</DialogDescription>
+          <DialogDescription>Add a capability to Cognio from a source, a file, or a description. {activeHint}</DialogDescription>
         </DialogHeader>
 
         <div className="mt-4 grid grid-cols-3 gap-2">

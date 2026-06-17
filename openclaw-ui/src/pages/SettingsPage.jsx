@@ -34,7 +34,7 @@ export default function SettingsPage() {
       </Card>
 
       <div className="mt-4 rounded-2xl border border-amber-200 bg-amber-50 p-4 text-sm text-amber-800">
-        To change these, edit <span className="font-mono">openclaw-ui/.env.local</span> and restart the dev server. The values are baked in at build time via Vite&apos;s <span className="font-mono">VITE_*</span> variables.
+        To change these, edit your <span className="font-mono">.env.local</span> and restart the dev server. The values are baked in at build time via Vite&apos;s <span className="font-mono">VITE_*</span> variables.
       </div>
     </PageLayout>
   )

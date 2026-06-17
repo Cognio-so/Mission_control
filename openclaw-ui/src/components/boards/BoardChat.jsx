@@ -2,6 +2,7 @@ import { useEffect, useRef, useState } from 'react'
 import { motion } from 'framer-motion'
 import { Send } from 'lucide-react'
 import { Button } from '../ui/button.jsx'
+import { Markdown } from '../atoms/Markdown.jsx'
 
 // Right-panel "Board chat" — talk to the lead agent.
 export function BoardChat({ messages, onSend, sending }) {
@@ -37,7 +38,10 @@ export function BoardChat({ messages, onSend, sending }) {
               </p>
               {m.created_at && <span className="text-xs text-slate-400">{m.created_at}</span>}
             </div>
-            <div className="mt-2 whitespace-pre-wrap break-words text-sm leading-relaxed text-slate-900">{m.content}{m.streaming && <span className="stream-caret" />}</div>
+            <div className="mt-2 text-sm leading-relaxed text-slate-900">
+              <Markdown content={m.content} />
+              {m.streaming && <span className="stream-caret align-middle" />}
+            </div>
           </motion.div>
         ))}
         {messages.length === 0 && (

@@ -3,7 +3,7 @@ import {
   DEMO_BOARDS, DEMO_TASKS, DEMO_GATEWAYS, DEMO_CRON,
 } from './demoData.js'
 
-const BASE = (import.meta.env.VITE_BROKER_URL || 'https://am-broker.cognio.so').replace(/\/+$/, '')
+const BASE = (import.meta.env.VITE_BROKER_URL || '/api').replace(/\/+$/, '')
 const SECRET = import.meta.env.VITE_BROKER_SECRET || ''
 // Demo fallback is OFF by default now — set VITE_USE_DEMO_DATA=1 to preview with seed data.
 const USE_DEMO = import.meta.env.VITE_USE_DEMO_DATA === '1'

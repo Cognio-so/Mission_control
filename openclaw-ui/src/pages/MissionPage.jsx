@@ -1,12 +1,13 @@
 import { useEffect, useMemo, useRef, useState } from 'react'
 import { AnimatePresence, motion } from 'framer-motion'
-import { Plus, Pencil, Trash2, Eraser, Send, Terminal, Sparkles } from 'lucide-react'
-import { ORCH_ID, newAgentTemplate, sessionKeyFor } from '../agents.js'
+import { Plus, Pencil, Trash2, Eraser, Send, Terminal, Sparkles, MessageSquarePlus, ChevronDown, History } from 'lucide-react'
+import { ORCH_ID, newAgentTemplate, sessionKeyFor, buildTeams } from '../agents.js'
 import { cn, cleanIcon, initials } from '../lib/utils.js'
 import { dedupeMessages } from '../store/reducer.js'
 import { useMission } from '../store/mission.jsx'
 import { AgentModal } from '../components/agents/AgentModal.jsx'
 import { StatusDot } from '../components/atoms/StatusDot.jsx'
+import { Markdown } from '../components/atoms/Markdown.jsx'
 import { Badge } from '../components/ui/badge.jsx'
 import { Button } from '../components/ui/button.jsx'
 
@@ -15,30 +16,40 @@ export default function MissionPage() {
   const {
     settings, agents, agentsById, orchestrator, roster, managed,
     activeId, setActiveId, state, anyRunning, agentsLoading, agentsError, agentStatus,
-    sendText, clearThread, saveAgent, deleteAgent, agentSaving, getThread,
+    sendText, clearThread, saveAgent, deleteAgent, agentSaving, getThread, newChat, currentSessionKey,
+    savedChats, resumeChat,
   } = m
 
   const active = agentsById[activeId] || orchestrator
   const thread = getThread(activeId)
-  const activeSession = sessionKeyFor(active, settings.session)
+  const activeSession = currentSessionKey(activeId)
 
-  // Recent conversations — agents you've chatted with, most recent first.
+  // Group agents into teams (orchestrator → its subagents) for the roster tree.
+  const teams = useMemo(() => buildTeams(agents), [agents])
+
+  // Recent conversations — active threads + saved (archived) chats, newest first.
+  // An agent can have many; New chat archives the previous one here.
   const recent = useMemo(() => {
-    return agents
+    const active = agents
       .map((a) => ({ a, t: getThread(a.id) }))
       .filter((x) => x.t.messages.length > 0)
       .map((x) => {
         const last = x.t.messages[x.t.messages.length - 1]
-        return { id: x.a.id, name: x.a.name, icon: x.a.icon, text: last?.text || '', ts: last?.ts || 0 }
+        return { kind: 'active', cid: 'active_' + x.a.id, agentId: x.a.id, name: x.a.name, icon: x.a.icon, text: last?.text || '', ts: last?.ts || 0 }
       })
-      .sort((p, q) => q.ts - p.ts)
-      .slice(0, 6)
+    const saved = (savedChats || []).map((c) => ({
+      kind: 'saved', cid: c.cid, agentId: c.agentId, name: c.name, icon: c.icon,
+      text: c.messages?.[c.messages.length - 1]?.text || '', ts: c.ts, saved: c,
+    }))
+    return [...active, ...saved].sort((p, q) => q.ts - p.ts).slice(0, 40)
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [agents, state.threads])
+  }, [agents, state.threads, savedChats])
 
   const [composer, setComposer] = useState('')
   const [agentModal, setAgentModal] = useState(null)
   const [rawOpen, setRawOpen] = useState(false)
+  const [collapsed, setCollapsed] = useState({})
+  const toggleTeam = (id) => setCollapsed((c) => ({ ...c, [id]: !c[id] }))
   const chatRef = useRef(null)
   const tlRef = useRef(null)
   const rawRef = useRef(null)
@@ -68,62 +79,125 @@ export default function MissionPage() {
   return (
     <div className="grid h-[calc(100vh-61px)] grid-cols-1 lg:grid-cols-[280px_1fr_360px]">
       {/* ---- Roster ---- */}
-      <aside className="hidden flex-col gap-3 overflow-y-auto border-r border-slate-200 bg-white p-4 scrollbar-thin lg:flex">
-        <Button className="w-full" onClick={() => setAgentModal({ mode: 'new', agent: newAgentTemplate() })}>
-          <Plus className="h-4 w-4" /> New agent
-        </Button>
-
-        <div className="grid grid-cols-2 gap-3">
-          <Metric label="Total agents" value={agents.length} />
-          <Metric label="Managed" value={managed.length} />
+      <aside className="hidden flex-col border-r border-slate-200 bg-white lg:flex">
+        {/* fixed top */}
+        <div className="space-y-3 p-4 pb-2">
+          <Button className="w-full" onClick={() => setAgentModal({ mode: 'new', agent: newAgentTemplate() })}>
+            <Plus className="h-4 w-4" /> New agent
+          </Button>
+          <div className="grid grid-cols-2 gap-3">
+            <Metric label="Total agents" value={agents.length} />
+            <Metric label="Managed" value={managed.length} />
+          </div>
+          {agentsError && <div className="rounded-lg bg-rose-50 px-3 py-2 text-xs text-rose-600">{agentsError}</div>}
+          {agentStatus && (
+            <div className={cn('rounded-lg px-3 py-2 text-xs',
+              agentStatus.tone === 'error' && 'bg-rose-50 text-rose-600',
+              agentStatus.tone === 'ok' && 'bg-emerald-50 text-emerald-700',
+              agentStatus.tone === 'pending' && 'bg-amber-50 text-amber-700')}>{agentStatus.text}</div>
+          )}
         </div>
 
-        {agentsError && <div className="rounded-lg bg-rose-50 px-3 py-2 text-xs text-rose-600">{agentsError}</div>}
-        {agentStatus && (
-          <div className={cn('rounded-lg px-3 py-2 text-xs',
-            agentStatus.tone === 'error' && 'bg-rose-50 text-rose-600',
-            agentStatus.tone === 'ok' && 'bg-emerald-50 text-emerald-700',
-            agentStatus.tone === 'pending' && 'bg-amber-50 text-amber-700')}>{agentStatus.text}</div>
-        )}
+        {/* team tree — scrolls in its own area so all agents are reachable */}
+        <div className="min-h-0 flex-1 space-y-3 overflow-y-auto px-4 pb-3 scrollbar-thin">
+        {teams.map((team) => {
+          const o = team.orchestrator
+          const oT = getThread(o.id)
+          const oDot = oT.running ? 'running' : oT.messages.length ? 'ready' : o.status || 'idle'
+          const isCollapsed = collapsed[team.id]
+          return (
+            <div key={team.id} className="overflow-hidden rounded-2xl border border-slate-200 bg-white shadow-sm">
+              {/* team header */}
+              <button
+                onClick={() => toggleTeam(team.id)}
+                className="flex w-full items-center gap-2 bg-gradient-to-r from-slate-50 to-white px-3 py-2 text-left"
+              >
+                <span className="text-[10px] font-bold uppercase tracking-[0.18em] text-slate-400">{team.name} team</span>
+                <span className="rounded-full bg-slate-200/70 px-1.5 py-px text-[10px] font-semibold text-slate-500">{team.members.length}</span>
+                <ChevronDown className={cn('ml-auto h-4 w-4 text-slate-400 transition-transform', isCollapsed && '-rotate-90')} />
+              </button>
 
-        <SectionLabel>Orchestrator</SectionLabel>
-        {orchestrator && (
-          <AgentCard
-            a={orchestrator} active={activeId === ORCH_ID} running={getThread(ORCH_ID).running}
-            hasMsgs={getThread(ORCH_ID).messages.length > 0} orchestrator meta={managed.length + ' managed'}
-            onSelect={() => setActiveId(ORCH_ID)} onEdit={() => setAgentModal({ mode: 'edit', agent: orchestrator })}
-          />
-        )}
+              {/* orchestrator head */}
+              <div className={cn('group flex items-center gap-2.5 border-t border-slate-100 px-2.5 py-2.5 transition',
+                activeId === o.id ? 'bg-[color:var(--accent-soft)]' : 'hover:bg-slate-50')}>
+                <button onClick={() => setActiveId(o.id)} className="flex min-w-0 flex-1 items-center gap-2.5 text-left">
+                  <div className={cn('grid h-9 w-9 shrink-0 place-items-center rounded-xl bg-gradient-to-br from-blue-600 to-blue-700 text-[11px] font-bold text-white', oT.running && 'animate-pulse-ring')}>
+                    {cleanIcon(o.icon, initials(o.name))}
+                  </div>
+                  <div className="min-w-0">
+                    <div className="flex items-center gap-1.5">
+                      <span className="truncate text-sm font-semibold text-strong">{o.name}</span>
+                      <span className="shrink-0 rounded bg-[color:var(--accent-soft)] px-1.5 py-px text-[9px] font-bold uppercase tracking-wide text-[color:var(--accent-strong)]">Lead</span>
+                    </div>
+                    <div className="truncate text-[11px] text-muted">{o.role || 'orchestrator'}</div>
+                  </div>
+                </button>
+                <StatusDot status={oDot} pulse={oT.running} />
+                <div className="flex gap-1 opacity-0 transition group-hover:opacity-100">
+                  <IconBtn onClick={(e) => { e.stopPropagation(); setAgentModal({ mode: 'edit', agent: o }) }}><Pencil className="h-3 w-3" /></IconBtn>
+                  {o.id !== ORCH_ID && <IconBtn danger onClick={(e) => { e.stopPropagation(); deleteAgent(o.id) }}><Trash2 className="h-3 w-3" /></IconBtn>}
+                </div>
+              </div>
 
-        <SectionLabel>
-          Specialists <span className="ml-1 rounded-full bg-slate-100 px-2 py-0.5 text-[10px] text-slate-500">{roster.length}</span>
-        </SectionLabel>
-        <div className="space-y-2">
-          {roster.length === 0 && <div className="rounded-lg bg-slate-50 px-3 py-3 text-xs text-slate-500">Create a specialist to start delegation.</div>}
-          {roster.map((a) => (
-            <AgentCard
-              key={a.id} a={a} active={activeId === a.id} running={getThread(a.id).running}
-              hasMsgs={getThread(a.id).messages.length > 0} meta={a.managedByOrchestrator ? 'managed' : 'standalone'}
-              onSelect={() => setActiveId(a.id)} onEdit={() => setAgentModal({ mode: 'edit', agent: a })}
-              onDelete={() => deleteAgent(a.id)}
-            />
-          ))}
+              {/* members tree */}
+              {!isCollapsed && (
+                <div className="relative py-1 pl-6 pr-2">
+                  <div className="absolute left-[18px] top-0 bottom-4 w-px bg-slate-200" />
+                  {team.members.length === 0 ? (
+                    <div className="py-2 pl-1 text-[11px] text-slate-400">No subagents yet.</div>
+                  ) : team.members.map((m) => {
+                    const t = getThread(m.id)
+                    const dot = t.running ? 'running' : t.messages.length ? 'ready' : m.status || 'idle'
+                    return (
+                      <div key={m.id} className="relative">
+                        <span className="absolute -left-[6px] top-1/2 h-px w-2.5 bg-slate-200" />
+                        <div className={cn('group flex items-center gap-2 rounded-lg px-2 py-1.5 transition',
+                          activeId === m.id ? 'bg-[color:var(--accent-soft)]' : 'hover:bg-slate-50')}>
+                          <button onClick={() => setActiveId(m.id)} className="flex min-w-0 flex-1 items-center gap-2 text-left">
+                            <div className="grid h-7 w-7 shrink-0 place-items-center rounded-lg bg-gradient-to-br from-slate-700 to-slate-900 text-[9px] font-bold text-white">
+                              {cleanIcon(m.icon, initials(m.name))}
+                            </div>
+                            <div className="min-w-0">
+                              <div className="truncate text-[13px] font-medium text-strong">{m.name}</div>
+                              <div className="truncate text-[11px] text-muted">{m.role || 'specialist'}</div>
+                            </div>
+                          </button>
+                          <StatusDot status={dot} pulse={t.running} />
+                          <div className="flex gap-1 opacity-0 transition group-hover:opacity-100">
+                            <IconBtn onClick={(e) => { e.stopPropagation(); setAgentModal({ mode: 'edit', agent: m }) }}><Pencil className="h-3 w-3" /></IconBtn>
+                            <IconBtn danger onClick={(e) => { e.stopPropagation(); deleteAgent(m.id) }}><Trash2 className="h-3 w-3" /></IconBtn>
+                          </div>
+                        </div>
+                      </div>
+                    )
+                  })}
+                </div>
+              )}
+            </div>
+          )
+        })}
         </div>
 
         {recent.length > 0 && (
-          <>
-            <SectionLabel>Recent</SectionLabel>
-            <div className="space-y-1.5">
+          <div className="border-t border-slate-200 px-4 py-3">
+            <SectionLabel>
+              Recent <span className="ml-1 rounded-full bg-slate-100 px-2 py-0.5 text-[10px] text-slate-500">{recent.length}</span>
+            </SectionLabel>
+            <div className="mt-1.5 max-h-60 space-y-1.5 overflow-y-auto pr-0.5 scrollbar-thin">
               {recent.map((r) => (
                 <button
-                  key={r.id} onClick={() => setActiveId(r.id)}
+                  key={r.cid} onClick={() => (r.kind === 'active' ? setActiveId(r.agentId) : resumeChat(r.saved))}
+                  title={r.kind === 'saved' ? 'Saved conversation — click to resume' : undefined}
                   className={cn('flex w-full items-center gap-2.5 rounded-lg border px-2.5 py-2 text-left transition',
-                    activeId === r.id ? 'border-[color:var(--accent)] bg-[color:var(--accent-soft)]' : 'border-slate-200 hover:bg-slate-50')}
+                    r.kind === 'active' && activeId === r.agentId ? 'border-[color:var(--accent)] bg-[color:var(--accent-soft)]' : 'border-slate-200 hover:bg-slate-50')}
                 >
                   <div className="grid h-7 w-7 shrink-0 place-items-center rounded-lg bg-gradient-to-br from-slate-700 to-slate-900 text-[10px] font-bold text-white">{cleanIcon(r.icon, initials(r.name))}</div>
                   <div className="min-w-0 flex-1">
                     <div className="flex items-center justify-between gap-2">
-                      <span className="truncate text-xs font-semibold text-strong">{r.name}</span>
+                      <span className="flex min-w-0 items-center gap-1 truncate text-xs font-semibold text-strong">
+                        {r.kind === 'saved' && <History className="h-3 w-3 shrink-0 text-slate-400" />}
+                        <span className="truncate">{r.name}</span>
+                      </span>
                       <span className="shrink-0 text-[10px] text-slate-400">{timeAgo(r.ts)}</span>
                     </div>
                     <div className="truncate text-[11px] text-muted">{r.text || '…'}</div>
@@ -131,12 +205,12 @@ export default function MissionPage() {
                 </button>
               ))}
             </div>
-          </>
+          </div>
         )}
       </aside>
 
       {/* ---- Chat ---- */}
-      <section className="flex min-h-0 flex-col bg-slate-50">
+      <section className="flex min-h-0 min-w-0 flex-col bg-slate-50">
         <header className="flex items-center gap-3 border-b border-slate-200 bg-white px-5 py-3">
           <div className="grid h-10 w-10 place-items-center rounded-xl bg-gradient-to-br from-blue-600 to-blue-700 text-xs font-bold text-white">
             {cleanIcon(active?.icon, initials(active?.name))}
@@ -148,10 +222,9 @@ export default function MissionPage() {
             </div>
             <div className="flex items-center gap-2 text-xs text-muted">
               <span className="truncate">{active?.role || 'agent'}</span>
-              <span className="text-slate-300">•</span>
-              <span className="font-mono">{activeSession}</span>
             </div>
           </div>
+          <Button variant="secondary" size="sm" onClick={() => newChat(activeId)} title="Start a new chat (fresh session)"><MessageSquarePlus className="h-4 w-4" /> New chat</Button>
           <Button variant="ghost" size="sm" onClick={() => clearThread(activeId)} title="Clear thread"><Eraser className="h-4 w-4" /></Button>
           <Button variant="ghost" size="sm" onClick={() => setAgentModal({ mode: 'edit', agent: active })} title="Edit"><Pencil className="h-4 w-4" /></Button>
           {active?.id !== ORCH_ID && (
@@ -159,7 +232,7 @@ export default function MissionPage() {
           )}
         </header>
 
-        <div ref={chatRef} className="min-h-0 flex-1 space-y-4 overflow-y-auto px-5 py-6 scrollbar-thin">
+        <div ref={chatRef} className="min-h-0 min-w-0 flex-1 space-y-4 overflow-y-auto px-5 py-6 scrollbar-thin">
           {thread.messages.length === 0 ? (
             <EmptyState active={active} onPick={sendText} />
           ) : (
@@ -192,9 +265,7 @@ export default function MissionPage() {
               <Send className="h-4 w-4" /> Run
             </Button>
           </div>
-          <div className="mt-2 text-[11px] text-slate-400">
-            {settings.demo ? 'Demo mode' : <>Broker <span className="font-mono">{settings.base}</span> · session <b className="font-mono">{activeSession}</b></>}
-          </div>
+          {settings.demo && <div className="mt-2 text-[11px] text-slate-400">Demo mode</div>}
         </div>
       </section>
 
@@ -312,21 +383,39 @@ function IconBtn({ children, danger, ...props }) {
 
 function ChatBubble({ m, active }) {
   const isUser = m.role === 'user'
+  const empty = !m.text || !m.text.trim()
   return (
     <motion.div initial={{ opacity: 0, y: 8 }} animate={{ opacity: 1, y: 0 }} className={cn('flex gap-3', isUser && 'flex-row-reverse')}>
       <div className={cn('grid h-8 w-8 shrink-0 place-items-center rounded-lg text-[10px] font-bold text-white',
         isUser ? 'bg-slate-400' : 'bg-gradient-to-br from-blue-600 to-blue-700')}>
         {isUser ? 'You' : cleanIcon(active?.icon, initials(active?.name))}
       </div>
-      <div className={cn('max-w-[80%]', isUser && 'text-right')}>
+      <div className={cn('min-w-0 max-w-[80%]', isUser && 'text-right')}>
         <div className="mb-1 text-xs font-semibold text-slate-500">{isUser ? 'You' : active?.name}</div>
-        <div className={cn('inline-block whitespace-pre-wrap rounded-2xl px-4 py-2.5 text-sm leading-relaxed',
-          isUser ? 'bg-[color:var(--accent)] text-white' : 'surface-card text-strong')}>
-          {m.text}
-          {m.streaming && <span className="stream-caret" />}
+        <div className={cn('max-w-full rounded-2xl px-4 py-2.5 text-sm leading-relaxed',
+          isUser ? 'inline-block whitespace-pre-wrap bg-[color:var(--accent)] text-white' : 'block w-fit overflow-hidden surface-card text-left text-strong')}>
+          {isUser ? (
+            m.text
+          ) : empty && m.streaming ? (
+            <Thinking />
+          ) : (
+            <>
+              <Markdown content={m.text} />
+              {m.streaming && <span className="stream-caret align-middle" />}
+            </>
+          )}
         </div>
       </div>
     </motion.div>
+  )
+}
+
+function Thinking() {
+  return (
+    <span className="inline-flex items-center gap-2 py-0.5 text-slate-400">
+      <span className="h-4 w-4 animate-spin rounded-full border-2 border-slate-200 border-t-[color:var(--accent)]" />
+      <span className="text-sm">Thinking…</span>
+    </span>
   )
 }
 

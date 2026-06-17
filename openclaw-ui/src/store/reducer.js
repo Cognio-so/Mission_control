@@ -39,6 +39,11 @@ export function reducer(s, a) {
     }
     case 'reset.thread':
       return withT(s, aid, blank())
+    case 'thread.restore': {
+      // unconditionally load a saved conversation's messages into the agent's thread
+      const t = getT(s, aid)
+      return withT(s, aid, { ...t, messages: a.messages || [], running: false, curAssistant: null })
+    }
     case 'thread.set': {
       const t = getT(s, aid)
       if (t.running) return s // never clobber an in-flight run
