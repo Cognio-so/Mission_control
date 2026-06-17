@@ -52,6 +52,32 @@ export function reducer(s, a) {
       if (server.length >= t.messages.length) return withT(s, aid, { ...t, messages: server })
       return s
     }
+    case 'thread.catchup': {
+      const t = getT(s, aid)
+      const server = dedupeMessages(a.messages || []).map((m) => ({ ...m, streaming: false }))
+      if (!server.length) return s
+
+      const local = t.messages || []
+      const lastServer = server[server.length - 1]
+      const hasFinalAssistant = lastServer?.role === 'assistant' && String(lastServer.text || '').trim()
+
+      if (t.running) {
+        const localWithoutEmptyPlaceholder = local.filter((m) => !(m.id === t.curAssistant && m.role === 'assistant' && !String(m.text || '').trim()))
+        // Only finish a running thread when server history has advanced through a
+        // real assistant answer. This fixes missed SSE finals without replacing a
+        // still-generating local stream with stale history.
+        if (hasFinalAssistant && server.length >= localWithoutEmptyPlaceholder.length) {
+          return {
+            ...withT(s, aid, { messages: server, running: false, curAssistant: null }),
+            timeline: s.timeline.concat({ id: rid(), kind: 'divider', text: 'run complete' }),
+          }
+        }
+        return s
+      }
+
+      if (server.length >= local.length) return withT(s, aid, { ...t, messages: server, running: false, curAssistant: null })
+      return s
+    }
     case 'reset.all':
       return { ...initial, conn: s.conn, raw: s.raw }
 
@@ -63,7 +89,9 @@ export function reducer(s, a) {
       }
     }
     case 'run.end': {
-      const t = { ...getT(s, aid), running: false, curAssistant: null }
+      const current = getT(s, aid)
+      if (!current.running && !current.curAssistant) return s
+      const t = { ...current, running: false, curAssistant: null }
       return {
         ...withT(s, aid, t),
         timeline: s.timeline.concat({ id: rid(), kind: 'divider', text: a.status === 'error' ? 'run failed' : 'run complete' }),

@@ -2,7 +2,7 @@ import { NavLink } from 'react-router-dom'
 import { motion } from 'framer-motion'
 import {
   BarChart3, Activity, Bot, Radar, LayoutGrid, Store, Boxes,
-  Network, Settings, Building2, Clock,
+  Network, Settings, Building2, Clock, MessagesSquare,
 } from 'lucide-react'
 import { cn } from '../../lib/utils.js'
 import { useMission } from '../../store/mission.jsx'
@@ -19,6 +19,7 @@ const SECTIONS = [
     title: 'Operations',
     items: [
       { to: '/mission', label: 'Mission Control', icon: Radar },
+      { to: '/conversations', label: 'Conversations', icon: MessagesSquare },
       { to: '/agents', label: 'Agents', icon: Bot },
       { to: '/scheduled', label: 'Scheduled', icon: Clock },
     ],
@@ -50,8 +51,8 @@ function NavItem({ to, label, icon: Icon }) {
       to={to}
       className={({ isActive }) =>
         cn(
-          'group relative flex items-center gap-3 rounded-lg px-3 py-2.5 text-sm text-slate-700 transition',
-          isActive ? 'bg-blue-100 font-medium text-blue-800' : 'hover:bg-slate-100',
+          'group relative flex items-center gap-3 rounded-lg px-3 py-2.5 text-sm text-[color:var(--text-muted)] transition',
+          isActive ? 'font-medium text-[color:var(--accent-strong)]' : 'hover:bg-[color:var(--surface-tint)] hover:text-[color:var(--accent-strong)]',
         )
       }
     >
@@ -60,7 +61,7 @@ function NavItem({ to, label, icon: Icon }) {
           {isActive && (
             <motion.span
               layoutId="nav-active"
-              className="absolute inset-0 -z-0 rounded-lg bg-blue-100"
+              className="absolute inset-0 -z-0 rounded-lg border border-[#c8e7dd] bg-[#eef8f4]"
               transition={{ type: 'spring', stiffness: 500, damping: 40 }}
             />
           )}
@@ -76,16 +77,16 @@ export function Sidebar() {
   const { conn } = useMission().state
   const operational = conn === 'live' || conn === 'demo'
   const statusLabel =
-    conn === 'live' ? 'All systems operational' : conn === 'demo' ? 'Demo workspace' : conn === 'connecting' ? 'Connecting to broker…' : 'Broker offline'
+    conn === 'live' ? 'All systems operational' : conn === 'demo' ? 'Demo workspace' : conn === 'connecting' ? 'Connecting to broker...' : 'Broker offline'
 
   return (
-    <aside className="hidden w-[260px] shrink-0 flex-col border-r border-slate-200 bg-white md:flex">
+    <aside className="hidden w-[260px] shrink-0 flex-col border-r border-[color:var(--border)] bg-[#fffaf0]/90 backdrop-blur md:flex">
       <div className="flex-1 overflow-y-auto px-3 py-5 scrollbar-thin">
-        <p className="px-3 text-xs font-semibold uppercase tracking-wider text-slate-500">Navigation</p>
+        <p className="px-3 text-xs font-semibold uppercase tracking-wider text-[color:var(--text-muted)]">Navigation</p>
         <nav className="mt-3 space-y-5 text-sm">
           {SECTIONS.map((section) => (
             <div key={section.title}>
-              <p className="px-3 text-[11px] font-semibold uppercase tracking-wider text-slate-400">{section.title}</p>
+              <p className="px-3 text-[11px] font-semibold uppercase tracking-wider text-[color:var(--text-quiet)]">{section.title}</p>
               <div className="mt-1 space-y-1">
                 {section.items.map((item) => (
                   <NavItem key={item.to} {...item} />
@@ -95,12 +96,12 @@ export function Sidebar() {
           ))}
         </nav>
       </div>
-      <div className="border-t border-slate-200 p-4">
-        <div className="flex items-center gap-2 text-xs text-slate-500">
+      <div className="border-t border-[color:var(--border)] p-4">
+        <div className="flex items-center gap-2 text-xs text-[color:var(--text-muted)]">
           <span
             className={cn(
               'h-2 w-2 rounded-full',
-              operational ? 'bg-emerald-500' : conn === 'connecting' ? 'bg-amber-500 animate-pulse' : 'bg-rose-500',
+              operational ? 'bg-[color:var(--success)]' : conn === 'connecting' ? 'bg-[color:var(--warning)] animate-pulse' : 'bg-[color:var(--danger)]',
             )}
           />
           {statusLabel}

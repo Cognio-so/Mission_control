@@ -102,8 +102,47 @@ export const DEMO_TASKS = {
 }
 
 export const DEMO_CRON = [
-  { id: 'daily-seo', name: 'Daily SEO audit', schedule: '0 9 * * *', agent: 'seo marketing agent', status: 'active', nextRun: 'Tomorrow 09:00', lastRun: 'Today 09:00' },
-  { id: 'weekly-digest', name: 'Weekly performance digest', schedule: '0 8 * * 1', agent: 'Orchestrator', status: 'paused', nextRun: '—', lastRun: 'Mon 08:00' },
+  {
+    id: 'daily-seo',
+    name: 'Daily SEO audit',
+    schedule: '0 9 * * *',
+    timezone: 'Asia/Kolkata',
+    agent: 'SEO Analyst',
+    status: 'active',
+    nextRun: 'Tomorrow 09:00',
+    lastRun: 'Today 09:00',
+    runCount: 42,
+    successCount: 39,
+    failureCount: 3,
+    runs: [
+      {
+        id: 'run_daily_42',
+        status: 'success',
+        startedAt: 'Today 09:00',
+        finishedAt: 'Today 09:03',
+        durationMs: 182000,
+        output: 'Checked 128 pages, found 7 stale titles, 3 missing meta descriptions, and 12 internal-link opportunities.',
+      },
+      { id: 'run_daily_41', status: 'success', startedAt: 'Yesterday 09:00', durationMs: 171000 },
+      { id: 'run_daily_40', status: 'failed', startedAt: 'Jun 15, 09:00', durationMs: 42000, error: 'Search provider timeout.' },
+    ],
+  },
+  {
+    id: 'weekly-digest',
+    name: 'Weekly performance digest',
+    schedule: '0 8 * * 1',
+    timezone: 'Asia/Kolkata',
+    agent: 'Main',
+    status: 'paused',
+    nextRun: '-',
+    lastRun: 'Mon 08:00',
+    runCount: 11,
+    successCount: 11,
+    failureCount: 0,
+    lastStatus: 'success',
+    durationMs: 241000,
+    lastOutput: 'Prepared weekly digest with traffic, ranking movement, lead quality, and pending content tasks.',
+  },
 ]
 
 export const DEMO_GATEWAYS = [

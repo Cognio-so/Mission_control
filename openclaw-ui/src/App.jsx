@@ -3,6 +3,7 @@ import { DashboardLayout } from './components/layout/DashboardLayout.jsx'
 import DashboardPage from './pages/DashboardPage.jsx'
 import MissionPage from './pages/MissionPage.jsx'
 import AgentsPage from './pages/AgentsPage.jsx'
+import ConversationsPage from './pages/ConversationsPage.jsx'
 import ActivityPage from './pages/ActivityPage.jsx'
 import BoardsPage from './pages/BoardsPage.jsx'
 import BoardDetailPage from './pages/BoardDetailPage.jsx'
@@ -19,6 +20,7 @@ export default function App() {
         <Route index element={<Navigate to="/dashboard" replace />} />
         <Route path="/dashboard" element={<DashboardPage />} />
         <Route path="/mission" element={<MissionPage />} />
+        <Route path="/conversations" element={<ConversationsPage />} />
         <Route path="/agents" element={<AgentsPage />} />
         <Route path="/scheduled" element={<ScheduledPage />} />
         <Route path="/activity" element={<ActivityPage />} />

@@ -1,17 +1,18 @@
 import { cn } from '../../lib/utils.js'
 
 const AGENT = {
-  online: 'bg-emerald-500', busy: 'bg-amber-500', provisioning: 'bg-amber-500',
-  updating: 'bg-sky-500', deleting: 'bg-rose-500', offline: 'bg-slate-400',
-  running: 'bg-emerald-500', ready: 'bg-sky-500', idle: 'bg-slate-300',
+  online: 'bg-[color:var(--success)]', busy: 'bg-[color:var(--warning)]', provisioning: 'bg-[color:var(--warning)]',
+  updating: 'bg-[color:var(--accent)]', deleting: 'bg-[color:var(--danger)]', offline: 'bg-[color:var(--text-quiet)]',
+  running: 'bg-[color:var(--success)]', ready: 'bg-[color:var(--accent)]', done: 'bg-[color:var(--success)]',
+  error: 'bg-[color:var(--danger)]', idle: 'bg-[color:var(--border-strong)]',
 }
-const APPROVAL = { approved: 'bg-emerald-500', rejected: 'bg-rose-500', pending: 'bg-amber-500' }
+const APPROVAL = { approved: 'bg-[color:var(--success)]', rejected: 'bg-[color:var(--danger)]', pending: 'bg-[color:var(--warning)]' }
 const TASK = {
-  inbox: 'bg-slate-400', assigned: 'bg-sky-500', in_progress: 'bg-purple-500',
-  testing: 'bg-amber-500', review: 'bg-indigo-500', done: 'bg-emerald-500',
+  inbox: 'bg-[color:var(--text-quiet)]', assigned: 'bg-[color:var(--accent)]', in_progress: 'bg-[color:var(--accent-strong)]',
+  testing: 'bg-[color:var(--warning)]', review: 'bg-[color:var(--accent-strong)]', done: 'bg-[color:var(--success)]',
 }
 const MAP = { agent: AGENT, approval: APPROVAL, task: TASK }
-const DEFAULT = { agent: 'bg-slate-300', approval: 'bg-amber-500', task: 'bg-slate-300' }
+const DEFAULT = { agent: 'bg-[color:var(--border-strong)]', approval: 'bg-[color:var(--warning)]', task: 'bg-[color:var(--border-strong)]' }
 
 export function statusDotClass(status, variant = 'agent') {
   const n = (status ?? '').trim().toLowerCase()

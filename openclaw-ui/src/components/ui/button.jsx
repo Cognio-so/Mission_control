@@ -7,12 +7,13 @@ export const buttonVariants = cva(
   {
     variants: {
       variant: {
-        primary: 'bg-[color:var(--accent)] text-white shadow-sm hover:bg-[color:var(--accent-strong)]',
+        primary:
+          'rounded-full bg-[linear-gradient(90deg,#45a895_0%,#0f4b49_100%)] text-[#fffaf0] shadow-[0_14px_34px_rgba(15,75,73,0.20)] hover:opacity-95',
         secondary:
-          'border border-[color:var(--border)] bg-[color:var(--surface)] text-strong hover:border-[color:var(--accent)] hover:text-[color:var(--accent)]',
+          'border border-[color:var(--border)] bg-[color:var(--surface)] text-strong shadow-sm hover:border-[color:var(--accent)] hover:bg-[color:var(--surface-tint)] hover:text-[color:var(--accent-strong)]',
         outline:
-          'border border-[color:var(--border-strong)] bg-transparent text-strong hover:border-[color:var(--accent)] hover:text-[color:var(--accent)]',
-        ghost: 'bg-transparent text-strong hover:bg-[color:var(--surface-strong)]',
+          'border border-[color:var(--border-strong)] bg-transparent text-strong hover:border-[color:var(--accent)] hover:bg-[color:var(--surface-tint)] hover:text-[color:var(--accent-strong)]',
+        ghost: 'bg-transparent text-strong hover:bg-[color:var(--surface-tint)] hover:text-[color:var(--accent-strong)]',
         danger: 'bg-[color:var(--danger)] text-white shadow-sm hover:opacity-90',
       },
       size: {

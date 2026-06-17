@@ -139,7 +139,7 @@ export default function SettingsPage() {
   const { settings, state } = useMission()
   const rows = [
     { icon: Server, label: 'Broker URL', value: settings.base || '-', mono: true },
-    { icon: Hash, label: 'Orchestrator session', value: settings.session, mono: true },
+    { icon: Hash, label: 'Main session', value: settings.session, mono: true },
     { icon: KeyRound, label: 'Broker secret', value: settings.secret ? '********' + settings.secret.slice(-4) : 'not set', mono: true },
     { icon: FlaskConical, label: 'Demo mode', value: settings.demo ? 'on' : 'off' },
   ]

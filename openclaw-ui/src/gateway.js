@@ -1,5 +1,5 @@
 // =============================================================================
-//  OpenClaw gateway WebSocket client (direct browser connection, testing).
+//  Gateway WebSocket client (direct browser connection, testing).
 //  Speaks the native control-plane protocol the built-in dashboard uses.
 //  Reverse-engineered from packages/gateway-protocol/src/schema.
 //

@@ -2,6 +2,7 @@ import { useEffect, useState, useCallback } from 'react'
 import {
   DEMO_BOARDS, DEMO_TASKS, DEMO_GATEWAYS, DEMO_CRON,
 } from './demoData.js'
+import { cleanChatText } from './chatText.js'
 
 const BASE = (import.meta.env.VITE_BROKER_URL || '/api').replace(/\/+$/, '')
 const SECRET = import.meta.env.VITE_BROKER_SECRET || ''
@@ -16,7 +17,8 @@ function headers(json = false) {
 }
 
 async function brokerGet(path) {
-  const r = await fetch(BASE + path, { headers: headers(), credentials: 'same-origin', cache: 'no-store' })
+  const r = await fetch(BASE + path, { headers: headers(), credentials: 'include', cache: 'no-store' })
+  if (r.status === 401) window.dispatchEvent(new Event('cognio-auth-change'))
   if (!r.ok) throw new Error('HTTP ' + r.status)
   return r.json()
 }
@@ -25,9 +27,10 @@ async function brokerSend(path, method, body, raw = false) {
   const r = await fetch(BASE + path, {
     method,
     headers: headers(!raw),
-    credentials: 'same-origin',
+    credentials: 'include',
     body: body == null ? undefined : raw ? body : JSON.stringify(body),
   })
+  if (r.status === 401) window.dispatchEvent(new Event('cognio-auth-change'))
   if (!r.ok) {
     const j = await r.json().catch(() => ({}))
     throw new Error(j.error || 'HTTP ' + r.status)
@@ -60,7 +63,26 @@ export const Api = {
   packs() { return load(async () => unwrap(await brokerGet('/skills/packs'), 'packs'), []) },
   boards() { return load(async () => unwrap(await brokerGet('/boards'), 'boards'), DEMO_BOARDS) },
   gateways() { return load(async () => unwrap(await brokerGet('/gateways'), 'gateways'), DEMO_GATEWAYS) },
-  cron() { return load(async () => unwrap(await brokerGet('/cron'), 'jobs'), DEMO_CRON) },
+  cron: {
+    list() {
+      return load(async () => unwrap(await brokerGet('/cron'), 'jobs'), DEMO_CRON)
+    },
+    create(job) {
+      return brokerSend('/cron', 'POST', job)
+    },
+    run(id) {
+      return brokerSend('/cron/' + encodeURIComponent(id) + '/run', 'POST')
+    },
+    remove(id) {
+      return brokerSend('/cron/' + encodeURIComponent(id), 'DELETE')
+    },
+    enable(id) {
+      return brokerSend('/cron/' + encodeURIComponent(id) + '/enable', 'POST')
+    },
+    disable(id) {
+      return brokerSend('/cron/' + encodeURIComponent(id) + '/disable', 'POST')
+    },
+  },
 
   async board(id) {
     try {
@@ -78,16 +100,13 @@ export const Api = {
   installSkill(id, gatewayId) {
     return brokerSend('/skills/marketplace/' + encodeURIComponent(id) + '/install', 'POST', { gatewayId })
   },
-  // Add a skill to OpenClaw. payload: { type: 'source'|'file'|'describe', ... }
+  // Add a skill. payload: { type: 'source'|'file'|'describe', ... }
   addSkill(payload) {
     return brokerSend('/skills/add', 'POST', payload)
   },
   // LLM-write an agent's instructions from a brief. { name, role, brief } -> { instructions }
   draftInstructions(brief) {
     return brokerSend('/agents/draft-instructions', 'POST', brief)
-  },
-  runCron(id) {
-    return brokerSend('/cron/' + encodeURIComponent(id) + '/run', 'POST')
   },
   moveTask(boardId, taskId, status) {
     return brokerSend('/boards/' + encodeURIComponent(boardId) + '/tasks/' + encodeURIComponent(taskId), 'PATCH', { status })
@@ -107,17 +126,20 @@ export const Api = {
 
   // Server-side conversation history for a session (cross-device resume).
   async chatHistory(sessionKey) {
-    const data = await brokerGet('/chat/history?sessionKey=' + encodeURIComponent(sessionKey))
+    const data = await brokerGet('/chat/history?sessionKey=' + encodeURIComponent(sessionKey) + '&limit=50')
     const arr = unwrap(data, 'messages') || []
     // broker returns 200 {messages:[], error} on a transient RPC failure — treat that
     // as a failure so the caller can retry later (and keep the local copy meanwhile).
     if (!arr.length && data && data.error) throw new Error(data.error)
-    return arr.map((m, i) => ({
-      id: m.id || 'h_' + i,
-      role: m.role === 'user' ? 'user' : 'assistant',
-      text: typeof m.content === 'string' ? m.content : m.text || '',
-      ts: typeof m.ts === 'number' ? m.ts : (m.created_at ? Date.parse(m.created_at) || 0 : 0),
-    }))
+    return arr.map((m, i) => {
+      const role = m.role === 'user' ? 'user' : 'assistant'
+      return {
+        id: m.id || 'h_' + i,
+        role,
+        text: cleanChatText(typeof m.content === 'string' ? m.content : m.text || '', role),
+        ts: typeof m.ts === 'number' ? m.ts : (m.created_at ? Date.parse(m.created_at) || 0 : 0),
+      }
+    }).filter((m) => m.role !== 'user' || m.text.trim())
   },
 
   // ---- Credentials / secrets (write-only; GET returns key names only, never values) ----

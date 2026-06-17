@@ -4,7 +4,7 @@ const sleep = ms => new Promise(r => setTimeout(r, ms))
 const uid = () => Math.random().toString(36).slice(2, 9)
 
 export async function runDemo(text, d, ctx = {}) {
-  const agent = ctx.agent || { id: ORCH_ID, name: 'Orchestrator', icon: 'OC' }
+  const agent = ctx.agent || { id: ORCH_ID, name: 'Main', icon: 'CG' }
   const agents = ctx.agents || []
   if (agent.id === ORCH_ID) return runOrchestrator(text, d, agent, agents)
   return runDirect(text, d, agent)
@@ -31,10 +31,10 @@ async function runOrchestrator(text, d, orch, agents) {
   }
 
   const q = text.length > 48 ? text.slice(0, 48) + '...' : text
-  d({ type: 'run.start', agent: aid, title: 'run_' + uid() + ' / orchestrator' })
+  d({ type: 'run.start', agent: aid, title: 'run_' + uid() + ' / main' })
   d({ type: 'assistant.start', agent: aid })
   await sleep(420)
-  d({ type: 'node', node: { cls: 'think', head: 'Orchestrator planning', sub: 'Breaking the request into steps and choosing specialists.' } })
+  d({ type: 'node', node: { cls: 'think', head: 'Main planning', sub: 'Breaking the request into steps and choosing specialists.' } })
   await sleep(850)
   const cid = 'c_' + uid()
   d({ type: 'node', id: cid, node: { cls: 'tool', head: 'Tool / web_search', tag: 'call', sub: 'args {"query":"' + q + '"}', status: 'pending' } })
@@ -123,7 +123,7 @@ function finalAnswer(picks) {
 
 function finalNoDelegates(text) {
   return 'Here is my take on "' + (text.length > 60 ? text.slice(0, 60) + '...' : text) + '". ' +
-    'I do not have managed agents yet, so I handled this myself. Create agents and mark them managed by Orchestrator to delegate next time.'
+    'I do not have team agents yet, so I handled this myself. Create a team lead and specialists to delegate next time.'
 }
 
 function directReply(agent, text) {

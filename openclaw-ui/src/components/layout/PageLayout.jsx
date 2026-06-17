@@ -27,7 +27,7 @@ export function PageLayout({ kicker, title, description, actions, children, wide
 
 export function EmptyPanel({ icon: Icon, title, hint, children }) {
   return (
-    <div className="flex flex-col items-center justify-center rounded-2xl border border-dashed border-slate-300 bg-white/60 px-6 py-16 text-center">
+    <div className="flex flex-col items-center justify-center rounded-2xl border border-dashed border-[color:var(--border-strong)] bg-[#fffaf0]/70 px-6 py-16 text-center shadow-[var(--shadow-card)]">
       {Icon && (
         <div className="mb-4 grid h-14 w-14 place-items-center rounded-2xl bg-[color:var(--accent-soft)] text-[color:var(--accent-strong)]">
           <Icon className="h-7 w-7" />

@@ -1,13 +1,14 @@
 import React, { createContext, useCallback, useContext, useEffect, useMemo, useReducer, useRef, useState } from 'react'
 import {
   BrokerClient,
-  fetchBrokerAgents, createBrokerAgent, updateBrokerAgent, deleteBrokerAgent,
+  fetchBrokerAgents, fetchBrokerTeams, createBrokerAgent, updateBrokerAgent, deleteBrokerAgent,
 } from '../broker.js'
 import { runDemo } from '../demo.js'
 import { Api } from '../lib/api.js'
 import {
-  ORCH_ID, fallbackOrchestrator, normalizeAgents, sessionKeyFor,
-  buildSessionMap, resolveAgentId, slugAgentId, normalizeSession,
+  ORCH_ID, fallbackOrchestrator, normalizeAgents, sessionKeyFor, formatSessionKey,
+  buildSessionMap, resolveAgentId, normalizeSession, buildTeams,
+  normalizeTeamResponse, flattenTeams, slugAgentId,
 } from '../agents.js'
 import { reducer, initial, getT, dedupeMessages } from './reducer.js'
 
@@ -23,6 +24,7 @@ function loadSettings() {
 // --- conversation persistence (resume across refresh) ---
 const THREADS_KEY = 'oc_threads_v1'
 const ACTIVE_KEY = 'oc_active_v1'
+const ACTIVE_DEFAULT_KEY = 'mc_main_default_v2'
 const SESSIONS_KEY = 'oc_sessions_v1'
 const SAVED_KEY = 'oc_saved_v1'
 
@@ -87,7 +89,16 @@ export function MissionProvider({ children }) {
   const [settings] = useState(loadSettings)
   const [agents, setAgents] = useState(() => normalizeAgents([], loadSettings().session))
   const [activeId, setActiveId] = useState(() => {
-    try { return localStorage.getItem(ACTIVE_KEY) || ORCH_ID } catch { return ORCH_ID }
+    try {
+      const saved = localStorage.getItem(ACTIVE_KEY)
+      const migrated = localStorage.getItem(ACTIVE_DEFAULT_KEY)
+      if (!migrated || saved === 'orchestrator') {
+        localStorage.setItem(ACTIVE_DEFAULT_KEY, '1')
+        localStorage.setItem(ACTIVE_KEY, ORCH_ID)
+        return ORCH_ID
+      }
+      return saved || ORCH_ID
+    } catch { return ORCH_ID }
   })
   const [state, dispatch] = useReducer(reducer, initial, (init) => ({
     ...init,
@@ -98,6 +109,7 @@ export function MissionProvider({ children }) {
   const [agentsError, setAgentsError] = useState('')
   const [agentStatus, setAgentStatus] = useState(null)
   const [agentSaving, setAgentSaving] = useState(false)
+  const [teamTree, setTeamTree] = useState(null)
   // per-agent active session key — a "New chat" points an agent at a fresh session id
   const [sessionOverrides, setSessionOverrides] = useState(loadSessionOverrides)
   // archived past conversations (one agent can have many) — shown in "Recent"
@@ -118,18 +130,30 @@ export function MissionProvider({ children }) {
   const orchestrator = agentsById[ORCH_ID]
   const roster = useMemo(() => agents.filter((a) => a.id !== ORCH_ID), [agents])
   const managed = useMemo(() => roster.filter((a) => a.managedByOrchestrator), [roster])
+  const teams = useMemo(() => teamTree?.teams?.length ? teamTree.teams : buildTeams(agents), [teamTree, agents])
   const anyRunning = Object.values(state.threads).some((t) => t.running)
 
   // the session key currently in use for an agent (its New-chat override, or the default)
   const currentSessionKey = useCallback(
-    (agentId) => sessionOverrides[agentId] || sessionKeyFor(agentsById[agentId], settings.session),
+    (agentId) => {
+      const id = agentId === 'orchestrator' ? ORCH_ID : (agentId || ORCH_ID)
+      const override = sessionOverrides[id]
+      if (override) return override.startsWith('agent:') ? override : formatSessionKey(id, override)
+      return sessionKeyFor(agentsById[id] || (id === ORCH_ID ? { id: ORCH_ID, kind: 'main' } : { id }), settings.session)
+    },
     [sessionOverrides, agentsById, settings.session],
   )
 
   // resolver map (incoming SSE → agent) must know the override sessions too
   useEffect(() => {
     const map = buildSessionMap(agents, settings.session)
-    for (const [agentId, key] of Object.entries(sessionOverrides)) map[normalizeSession(key)] = agentId
+    for (const [agentId, key] of Object.entries(sessionOverrides)) {
+      const formatted = String(key || '').startsWith('agent:') ? String(key) : formatSessionKey(agentId, key)
+      map[normalizeSession(key)] = agentId
+      map[String(key).toLowerCase()] = agentId
+      map[normalizeSession(formatted)] = agentId
+      map[String(formatted).toLowerCase()] = agentId
+    }
     sessionMapRef.current = map
   }, [agents, settings.session, sessionOverrides])
 
@@ -137,6 +161,7 @@ export function MissionProvider({ children }) {
   const loadBrokerAgents = useCallback(async (silent = false) => {
     if (settings.demo || !settings.base) {
       setAgents(normalizeAgents([], settings.session))
+      setTeamTree(null)
       loadedRef.current = true
       return
     }
@@ -144,12 +169,23 @@ export function MissionProvider({ children }) {
     setAgentsError('')
     try {
       const list = await fetchBrokerAgents(settings)
-      setAgents(normalizeAgents(list, settings.session))
+      let tree = null
+      try {
+        tree = normalizeTeamResponse(await fetchBrokerTeams(settings), settings.session)
+      } catch {
+        tree = null
+      }
+      const merged = new Map()
+      for (const agent of list || []) if (agent?.id) merged.set(agent.id, agent)
+      for (const agent of flattenTeams(tree)) if (agent?.id) merged.set(agent.id, agent)
+      setAgents(normalizeAgents(Array.from(merged.values()), settings.session))
+      setTeamTree(tree)
       loadedRef.current = true
     } catch (err) {
       if (!silent) {
         setAgentsError(err.message || 'Could not load agents')
         setAgents(normalizeAgents([], settings.session))
+        setTeamTree(null)
       }
       // on a silent poll failure keep the current roster — don't wipe it
     } finally {
@@ -192,6 +228,37 @@ export function MissionProvider({ children }) {
   )
   useEffect(() => { loadHistory(activeId) }, [activeId, loadHistory])
 
+  const catchUpHistory = useCallback(
+    async (agentId) => {
+      if (settings.demo || !settings.base) return
+      const agent = agentsById[agentId]
+      if (!agent && agentId !== ORCH_ID) return
+      try {
+        const msgs = await Api.chatHistory(currentSessionKey(agentId))
+        if (msgs && msgs.length) dispatch({ type: 'thread.catchup', agent: agentId, messages: msgs })
+      } catch {
+        // keep the local stream; the next poll or SSE event can still complete it
+      }
+    },
+    [settings, agentsById, currentSessionKey],
+  )
+
+  useEffect(() => {
+    if (!anyRunning || settings.demo || !settings.base) return
+    const runningIds = Object.entries(state.threads).filter(([, t]) => t.running).map(([id]) => id)
+    if (!runningIds.length) return
+
+    const poll = () => {
+      for (const id of runningIds) catchUpHistory(id)
+    }
+    const initial = window.setTimeout(poll, 2500)
+    const timer = window.setInterval(poll, 3500)
+    return () => {
+      window.clearTimeout(initial)
+      window.clearInterval(timer)
+    }
+  }, [anyRunning, state.threads, settings.demo, settings.base, catchUpHistory])
+
   // Snapshot an agent's current conversation into "Recent" (so it isn't lost).
   const archiveCurrent = useCallback(
     (id) => {
@@ -201,7 +268,7 @@ export function MissionProvider({ children }) {
       const last = cur.messages[cur.messages.length - 1]
       const snapshot = {
         cid: 'c_' + id + '_' + Date.now().toString(36),
-        sessionKey: sessionOverrides[id] || sessionKeyFor(agentsById[id], settings.session),
+        sessionKey: currentSessionKey(id),
         agentId: id,
         name: agent?.name || id,
         icon: agent?.icon || null,
@@ -210,7 +277,7 @@ export function MissionProvider({ children }) {
       }
       setSavedChats((prev) => [snapshot, ...prev.filter((c) => c.sessionKey !== snapshot.sessionKey)].slice(0, 60))
     },
-    [state, agentsById, sessionOverrides, settings.session],
+    [state, agentsById, currentSessionKey],
   )
 
   // New chat: archive the current conversation, then point the agent at a fresh session.
@@ -218,8 +285,8 @@ export function MissionProvider({ children }) {
     (agentId) => {
       const id = agentId || activeId
       archiveCurrent(id)
-      const base = sessionKeyFor(agentsById[id], settings.session)
-      const key = base + '__' + Date.now().toString(36)
+      const base = normalizeSession(sessionKeyFor(agentsById[id] || (id === ORCH_ID ? { id: ORCH_ID, kind: 'main' } : { id }), settings.session))
+      const key = formatSessionKey(id, base + '__' + Date.now().toString(36))
       historyLoadedRef.current.add(key) // fresh session — nothing to fetch
       setSessionOverrides((o) => ({ ...o, [id]: key }))
       dispatch({ type: 'reset.thread', agent: id })
@@ -230,31 +297,46 @@ export function MissionProvider({ children }) {
   // Resume a saved conversation from Recent (archives the agent's current one first).
   const resumeChat = useCallback(
     (saved) => {
-      const id = saved.agentId
-      const curKey = sessionOverrides[id] || sessionKeyFor(agentsById[id], settings.session)
-      if (curKey !== saved.sessionKey) archiveCurrent(id)
+      const id = saved.agentId === 'orchestrator' ? ORCH_ID : saved.agentId
+      const savedKey = String(saved.sessionKey || '').startsWith('agent:')
+        ? String(saved.sessionKey)
+        : formatSessionKey(id, saved.sessionKey || (id === ORCH_ID ? settings.session : 'agent_' + id))
+      const curKey = currentSessionKey(id)
+      if (curKey !== savedKey) archiveCurrent(id)
       setSavedChats((prev) => prev.filter((c) => c.cid !== saved.cid))
-      setSessionOverrides((o) => ({ ...o, [id]: saved.sessionKey }))
-      historyLoadedRef.current.add(saved.sessionKey)
+      setSessionOverrides((o) => ({ ...o, [id]: savedKey }))
+      historyLoadedRef.current.add(savedKey)
       dispatch({ type: 'thread.restore', agent: id, messages: (saved.messages || []).map((m) => ({ ...m, streaming: false })) })
       setActiveId(id)
     },
-    [agentsById, sessionOverrides, settings.session, archiveCurrent],
+    [settings.session, currentSessionKey, archiveCurrent],
   )
+
+  const deleteConversation = useCallback((entry) => {
+    if (!entry) return
+    if (entry.kind === 'saved' || entry.saved) {
+      const cid = entry.cid || entry.saved?.cid
+      setSavedChats((prev) => prev.filter((c) => c.cid !== cid))
+      return
+    }
+    const id = entry.agentId === 'orchestrator' ? ORCH_ID : entry.agentId
+    if (id) dispatch({ type: 'reset.thread', agent: id })
+  }, [])
 
   useEffect(() => {
     if (clientRef.current) { clientRef.current.close(true); clientRef.current = null }
     if (settings.demo) { dispatch({ type: 'conn', status: 'demo' }); return }
     if (!settings.base) { dispatch({ type: 'conn', status: 'off' }); return }
+    const mainSessionKey = formatSessionKey(ORCH_ID, settings.session)
     const client = new BrokerClient(
       {
-        base: settings.base, secret: settings.secret, session: settings.session, orchId: ORCH_ID,
+        base: settings.base, secret: settings.secret, session: mainSessionKey, orchId: ORCH_ID,
         resolveAgent: (sk) => resolveAgentId(sessionMapRef.current, sk),
       },
       dispatch,
     )
     clientRef.current = client
-    client.connect()
+    client.connect(mainSessionKey)
     return () => client.close(true)
   }, [settings.demo, settings.base, settings.secret, settings.session])
 
@@ -285,7 +367,7 @@ export function MissionProvider({ children }) {
       } else if (!settings.base) {
         dispatch({ type: 'assistant.note', agent: id, text: 'No broker is configured. Set VITE_BROKER_URL and restart the UI.' })
       } else if (clientRef.current) {
-        clientRef.current.sendMessage(text, { agentId: id, sessionKey, agents, label: agent.name + ' / ' + sessionKey })
+        clientRef.current.sendMessage(text, { agentId: id, sessionKey, agents, label: (agent?.name || id) + ' / ' + sessionKey })
       }
     },
     [state, activeId, settings, agents, agentsById, currentSessionKey],
@@ -300,25 +382,37 @@ export function MissionProvider({ children }) {
   const saveAgent = useCallback(
     async (agent, mode) => {
       const isNew = mode === 'new'
-      const payload = { ...agent, id: isNew ? slugAgentId(agent.name) : agent.id, sessionKey: isNew ? '' : agent.sessionKey }
+      const localId = agent.id || slugAgentId(agent.name)
+      const payload = {
+        ...agent,
+        name: (agent.name || '').trim(),
+        role: (agent.role || '').trim(),
+        instructions: (agent.instructions || '').trim(),
+      }
+      if (isNew) {
+        delete payload.id
+        delete payload.sessionKey
+      } else {
+        payload.id = agent.id
+      }
       if (settings.demo) {
         setAgents((prev) =>
           normalizeAgents(
-            prev.some((a) => a.id === payload.id) ? prev.map((a) => (a.id === payload.id ? payload : a)) : prev.concat(payload),
+            prev.some((a) => a.id === localId) ? prev.map((a) => (a.id === localId ? { ...payload, id: localId } : a)) : prev.concat({ ...payload, id: localId }),
             settings.session,
           ),
         )
-        setActiveId(payload.id)
-        return payload
+        setActiveId(localId)
+        return { ...payload, id: localId }
       }
       setAgentSaving(true)
       setAgentStatus({ tone: 'pending', text: (isNew ? 'Creating' : 'Saving') + ' agent in broker...' })
       try {
         const saved = isNew ? await createBrokerAgent(settings, payload) : await updateBrokerAgent(settings, payload.id, payload)
         await loadBrokerAgents()
-        setActiveId(saved?.id || payload.id)
+        setActiveId(saved?.id || payload.id || localId)
         setAgentStatus({ tone: 'ok', text: (saved?.name || payload.name) + ' saved in broker.' })
-        return saved || payload
+        return saved || { ...payload, id: localId }
       } catch (err) {
         setAgentStatus({ tone: 'error', text: err.message || String(err) })
         dispatch({ type: 'node', node: { cls: 'error', head: 'Agent save failed', sub: err.message || String(err) } })
@@ -365,11 +459,11 @@ export function MissionProvider({ children }) {
   )
 
   const value = {
-    settings, agents, agentsById, orchestrator: orchestrator || fallbackOrchestrator(), roster, managed,
+    settings, agents, agentsById, orchestrator: orchestrator || fallbackOrchestrator(), roster, managed, teams,
     activeId, setActiveId, state, dispatch, anyRunning,
     agentsLoading, agentsError, agentStatus, agentSaving,
     loadBrokerAgents, sendText, reconnect, clearThread, saveAgent, deleteAgent,
-    newChat, currentSessionKey, savedChats, resumeChat,
+    newChat, currentSessionKey, savedChats, resumeChat, deleteConversation,
     getThread: (id) => getT(state, id),
   }
 

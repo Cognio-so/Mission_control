@@ -10,23 +10,24 @@ import { Badge } from '../components/ui/badge.jsx'
 
 export default function DashboardPage() {
   const { agents, managed, state, anyRunning, settings } = useMission()
+  const teamAgents = agents.filter((agent) => agent.kind !== 'main')
   const { data: boards } = useApi(() => Api.boards(), [])
   const { data: skills } = useApi(() => Api.skills(), [])
 
   const stats = [
-    { label: 'Agents', value: agents.length, icon: Bot, to: '/agents', tint: 'from-blue-600 to-blue-700' },
-    { label: 'Managed', value: managed.length, icon: Radar, to: '/mission', tint: 'from-violet-600 to-violet-700' },
-    { label: 'Boards', value: (boards || []).length, icon: LayoutGrid, to: '/boards', tint: 'from-emerald-600 to-emerald-700' },
-    { label: 'Skills', value: (skills || []).length, icon: Store, to: '/skills/marketplace', tint: 'from-amber-500 to-orange-600' },
+    { label: 'Agents', value: teamAgents.length, icon: Bot, to: '/agents', tint: 'from-[#45a895] to-[#0f4b49]' },
+    { label: 'Specialists', value: managed.length, icon: Radar, to: '/mission', tint: 'from-[#6aa99b] to-[#154f4c]' },
+    { label: 'Boards', value: (boards || []).length, icon: LayoutGrid, to: '/boards', tint: 'from-[#8fbfb1] to-[#12524c]' },
+    { label: 'Skills', value: (skills || []).length, icon: Store, to: '/skills/marketplace', tint: 'from-[#c99a55] to-[#8f6234]' },
   ]
   const recent = state.timeline.slice(-6).reverse()
   const connLive = state.conn === 'live' || state.conn === 'demo'
 
   return (
-    <PageLayout kicker="Overview" title="Mission Control" description="Your command center for Cognio agents — coordinate runs, manage skills, and track work across boards." wide>
+    <PageLayout kicker="Overview" title="Mission Control" description="Your command center for Cognio agents - coordinate runs, manage skills, and track work across boards." wide>
       {/* hero banner */}
       <motion.div initial={{ opacity: 0, y: 12 }} animate={{ opacity: 1, y: 0 }}
-        className="mb-6 overflow-hidden rounded-3xl bg-gradient-to-br from-slate-900 via-slate-900 to-blue-950 p-7 text-white shadow-lg">
+        className="mb-6 overflow-hidden rounded-lg border border-[#b8d6cc] bg-[linear-gradient(135deg,#154f4c_0%,#0f4b49_58%,#45a895_145%)] p-7 text-[#fffaf0] shadow-[0_24px_70px_rgba(15,75,73,0.18)]">
         <div className="flex flex-wrap items-center justify-between gap-4">
           <div>
             <div className="mb-2 inline-flex items-center gap-2 rounded-full bg-white/10 px-3 py-1 text-xs font-semibold uppercase tracking-wide">
@@ -34,9 +35,9 @@ export default function DashboardPage() {
               {connLive ? 'Broker connected' : 'Broker offline'}
             </div>
             <h2 className="font-display text-2xl font-semibold md:text-3xl">{anyRunning ? 'A run is in progress' : 'Ready for the next run'}</h2>
-            <p className="mt-1 text-sm text-slate-300">Connected to <span className="font-mono">{settings.demo ? 'demo workspace' : brokerHost(settings.base)}</span></p>
+            <p className="mt-1 text-sm text-[#c7e8df]">Connected to <span className="font-mono">{settings.demo ? 'demo workspace' : brokerHost(settings.base)}</span></p>
           </div>
-          <Link to="/mission" className="inline-flex items-center gap-2 rounded-xl bg-white px-5 py-3 text-sm font-semibold text-slate-900 transition hover:bg-slate-100">
+          <Link to="/mission" className="inline-flex items-center gap-2 rounded-full bg-[#fffaf0] px-5 py-3 text-sm font-semibold text-[#0f4b49] shadow-sm transition hover:bg-[#eef8f4]">
             <Zap className="h-4 w-4" /> Open Mission Control
           </Link>
         </div>

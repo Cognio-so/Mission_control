@@ -16,6 +16,7 @@ import { Badge } from '../components/ui/badge.jsx'
 export default function AgentsPage() {
   const m = useMission()
   const { agents, settings, setActiveId, saveAgent, deleteAgent, agentSaving, getThread } = m
+  const brokerAgents = agents.filter((agent) => agent.id !== ORCH_ID)
   const [modal, setModal] = useState(null)
   const [filesAgent, setFilesAgent] = useState(null)
   const nav = useNavigate()
@@ -27,12 +28,12 @@ export default function AgentsPage() {
     <PageLayout
       kicker="Operations"
       title="Agents"
-      description="Your orchestrator and specialist agents. Create, edit, and jump into a live thread with any of them."
+      description="Your team leads and specialist agents. Create, edit, and jump into a live thread with any of them."
       actions={<Button onClick={() => setModal({ mode: 'new', agent: newAgentTemplate() })}><Plus className="h-4 w-4" /> New agent</Button>}
       wide
     >
-      {agents.length <= 1 ? (
-        <EmptyPanel icon={Bot} title="Only the Orchestrator so far" hint="Create a specialist agent to start delegating work.">
+      {brokerAgents.length === 0 ? (
+        <EmptyPanel icon={Bot} title="No team agents yet" hint="Create a team lead or specialist agent to start building the workspace.">
           <Button onClick={() => setModal({ mode: 'new', agent: newAgentTemplate() })}><Plus className="h-4 w-4" /> New agent</Button>
         </EmptyPanel>
       ) : (
@@ -44,7 +45,7 @@ export default function AgentsPage() {
             <span>Actions</span>
           </div>
           <div className="divide-y divide-slate-100">
-            {agents.map((a, i) => {
+            {brokerAgents.map((a, i) => {
               const t = getThread(a.id)
               const dot = a.status || (t.running ? 'running' : t.messages.length ? 'ready' : 'idle')
               return (
@@ -59,7 +60,7 @@ export default function AgentsPage() {
                     <div className="min-w-0">
                       <div className="flex items-center gap-2">
                         <span className="truncate text-sm font-semibold text-strong">{a.name}</span>
-                        {a.id === ORCH_ID ? <Badge variant="accent">orchestrator</Badge> : a.managedByOrchestrator ? <Badge variant="outline">managed</Badge> : null}
+                        {a.kind === 'orchestrator' ? <Badge variant="accent">team lead</Badge> : a.managedByOrchestrator ? <Badge variant="outline">specialist</Badge> : null}
                       </div>
                       <div className="flex items-center gap-1.5 text-xs text-muted"><StatusDot status={dot} pulse={t.running} /> {dot}</div>
                     </div>
@@ -68,13 +69,9 @@ export default function AgentsPage() {
                   <div className="hidden truncate font-mono text-xs text-slate-500 sm:block">{sessionKeyFor(a, settings.session)}</div>
                   <div className="flex items-center justify-end gap-1.5">
                     <Button variant="ghost" size="icon" title="Open chat" onClick={() => openChat(a.id)}><MessageSquare className="h-4 w-4" /></Button>
-                    {a.id !== ORCH_ID && (
-                      <Button variant="ghost" size="icon" title="Memory & files" onClick={() => setFilesAgent({ id: a.id, name: a.name })}><Brain className="h-4 w-4" /></Button>
-                    )}
+                    <Button variant="ghost" size="icon" title="Memory & files" onClick={() => setFilesAgent({ id: a.id, name: a.name })}><Brain className="h-4 w-4" /></Button>
                     <Button variant="ghost" size="icon" title="Edit" onClick={() => setModal({ mode: 'edit', agent: a })}><Pencil className="h-4 w-4" /></Button>
-                    {a.id !== ORCH_ID && (
-                      <Button variant="ghost" size="icon" title="Delete" className="text-rose-600 hover:bg-rose-50" onClick={() => deleteAgent(a.id)}><Trash2 className="h-4 w-4" /></Button>
-                    )}
+                    <Button variant="ghost" size="icon" title="Delete" className="text-rose-600 hover:bg-rose-50" onClick={() => deleteAgent(a.id)}><Trash2 className="h-4 w-4" /></Button>
                   </div>
                 </motion.div>
               )
@@ -86,7 +83,7 @@ export default function AgentsPage() {
       {modal && (
         <AgentModal
           entry={modal} onSave={onSave} saving={agentSaving}
-          onDelete={modal.mode === 'edit' && modal.agent.id !== ORCH_ID ? async () => { if (await deleteAgent(modal.agent.id)) setModal(null) } : null}
+          onDelete={modal.mode === 'edit' ? async () => { if (await deleteAgent(modal.agent.id)) setModal(null) } : null}
           onClose={() => setModal(null)}
         />
       )}

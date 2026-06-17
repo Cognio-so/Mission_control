@@ -16,7 +16,7 @@ export function isLoginEnabled() {
 export async function getSession() {
   if (!LOGIN_ENABLED) return { authenticated: true }
   const response = await fetch(BASE + '/session', {
-    credentials: 'same-origin',
+    credentials: 'include',
     cache: 'no-store',
   })
   if (response.status === 401) return { authenticated: false }
@@ -27,7 +27,7 @@ export async function login(username, password) {
   if (!LOGIN_ENABLED) return { authenticated: true }
   const response = await fetch(BASE + '/login', {
     method: 'POST',
-    credentials: 'same-origin',
+    credentials: 'include',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({ username, password }),
   })
@@ -39,7 +39,7 @@ export async function signOut() {
   if (LOGIN_ENABLED) {
     await fetch(BASE + '/logout', {
       method: 'POST',
-      credentials: 'same-origin',
+      credentials: 'include',
     }).catch(() => {})
   }
   window.dispatchEvent(new Event('cognio-auth-change'))

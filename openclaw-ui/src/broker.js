@@ -41,9 +41,22 @@ function unwrapAgents(data) {
   return []
 }
 
+function unwrapTeams(data) {
+  if (Array.isArray(data?.teams)) return data
+  if (Array.isArray(data?.data?.teams)) return data.data
+  return { teams: [], ungrouped: [] }
+}
+
+function notifyUnauthorized(response) {
+  if (response?.status === 401 && typeof window !== 'undefined') {
+    window.dispatchEvent(new Event('cognio-auth-change'))
+  }
+}
+
 async function readJsonResponse(response) {
   const data = await response.json().catch(() => ({}))
   if (!response.ok || data?.ok === false) {
+    notifyUnauthorized(response)
     throw new Error(data?.error || data?.message || ('HTTP ' + response.status + ' ' + response.statusText))
   }
   return data
@@ -56,17 +69,26 @@ export function brokerHost(u) {
 export async function fetchBrokerAgents({ base, secret }) {
   const response = await fetch(trim(base) + '/agents', {
     headers: authHeaders(secret),
-    credentials: 'same-origin',
+    credentials: 'include',
     cache: 'no-store',
   })
   return unwrapAgents(await readJsonResponse(response))
+}
+
+export async function fetchBrokerTeams({ base, secret }) {
+  const response = await fetch(trim(base) + '/teams', {
+    headers: authHeaders(secret),
+    credentials: 'include',
+    cache: 'no-store',
+  })
+  return unwrapTeams(await readJsonResponse(response))
 }
 
 export async function createBrokerAgent({ base, secret }, agent) {
   const response = await fetch(trim(base) + '/agents', {
     method: 'POST',
     headers: authHeaders(secret, true),
-    credentials: 'same-origin',
+    credentials: 'include',
     body: JSON.stringify(agent),
   })
   const data = await readJsonResponse(response)
@@ -77,7 +99,7 @@ export async function updateBrokerAgent({ base, secret }, id, patch) {
   const response = await fetch(trim(base) + '/agents/' + encodeURIComponent(id), {
     method: 'PATCH',
     headers: authHeaders(secret, true),
-    credentials: 'same-origin',
+    credentials: 'include',
     body: JSON.stringify(patch),
   })
   const data = await readJsonResponse(response)
@@ -88,7 +110,7 @@ export async function deleteBrokerAgent({ base, secret }, id) {
   const response = await fetch(trim(base) + '/agents/' + encodeURIComponent(id), {
     method: 'DELETE',
     headers: authHeaders(secret),
-    credentials: 'same-origin',
+    credentials: 'include',
   })
   return readJsonResponse(response)
 }
@@ -99,7 +121,8 @@ export class BrokerClient {
     this.d = dispatch
     this.es = null
     this.connected = false
-    this.pendingAgent = cfg.orchId || 'orchestrator'
+    this.pendingAgent = cfg.orchId || 'main'
+    this.streamSessionKey = null
   }
 
   setResolver(fn) { this.cfg.resolveAgent = fn }
@@ -111,7 +134,7 @@ export class BrokerClient {
     return r || this.pendingAgent
   }
 
-  async connect() {
+  async connect(sessionKey = this.cfg.session || 'main') {
     this.close(true)
     const base = trim(this.cfg.base)
     if (!base) {
@@ -122,7 +145,8 @@ export class BrokerClient {
     this.status('connecting')
     this.raw('sys', 'broker ' + base + ' / checking /health')
     try {
-      const r = await fetch(base + '/health', { credentials: 'same-origin', cache: 'no-store' })
+      const r = await fetch(base + '/health', { credentials: 'include', cache: 'no-store' })
+      notifyUnauthorized(r)
       const h = await r.json()
       const g = h.gateway || {}
       this.raw('sys', 'health: gateway ' + (g.connected ? 'connected' : 'down') + ' / scopes=' + JSON.stringify(g.scopes || []) + ' / server ' + (g.serverVersion || '?'))
@@ -130,9 +154,10 @@ export class BrokerClient {
       this.raw('err', '/health failed: ' + e.message)
     }
 
-    const url = this.cfg.secret
-      ? base + '/stream?token=' + encodeURIComponent(this.cfg.secret)
-      : base + '/stream'
+    const params = new URLSearchParams()
+    if (sessionKey) params.set('sessionKey', sessionKey)
+    if (this.cfg.secret) params.set('token', this.cfg.secret)
+    const url = base + '/stream' + (params.toString() ? '?' + params.toString() : '')
     let es
     try {
       es = new EventSource(url, { withCredentials: true })
@@ -143,6 +168,7 @@ export class BrokerClient {
     }
 
     this.es = es
+    this.streamSessionKey = sessionKey
     es.onopen = () => {
       this.connected = true
       this.status('live')
@@ -166,6 +192,18 @@ export class BrokerClient {
       this.raw('in', '< tool ' + String(e.data).slice(0, 300))
       this.onTool(e.data)
     })
+    es.addEventListener('session.tool', e => {
+      this.raw('in', '< session.tool ' + String(e.data).slice(0, 300))
+      this.onTool(e.data)
+    })
+    es.addEventListener('session.operation', e => {
+      this.raw('in', '< session.operation ' + String(e.data).slice(0, 300))
+      this.onOperation(e.data)
+    })
+    es.addEventListener('agent', e => {
+      this.raw('in', '< agent ' + String(e.data).slice(0, 300))
+      this.onOperation(e.data)
+    })
     es.onmessage = e => {
       this.raw('in', '< ' + String(e.data).slice(0, 300))
       this.onChat(e.data)
@@ -179,6 +217,7 @@ export class BrokerClient {
       this.es = null
     }
     this.connected = false
+    this.streamSessionKey = null
     if (!silent) this.status('off')
   }
 
@@ -227,11 +266,20 @@ export class BrokerClient {
     this.d({ type: 'node', node: { cls: 'tool', head: 'Tool / ' + tool, tag: 'event', sub: shortJson(payload) } })
   }
 
+  onOperation(data) {
+    let p
+    try { p = JSON.parse(data) } catch { return }
+    const payload = (p && p.payload) || p
+    const label = payload.type || payload.operation || payload.event || payload.name || 'operation'
+    this.d({ type: 'node', node: { cls: 'tool', head: 'Operation / ' + label, tag: 'event', sub: shortJson(payload) } })
+  }
+
   async sendMessage(text, opts = {}) {
     const base = trim(this.cfg.base)
     const sessionKey = opts.sessionKey || this.cfg.session || 'main'
     const agent = opts.agentId || this.pendingAgent
     this.pendingAgent = agent
+    if (this.streamSessionKey !== sessionKey || !this.es) await this.connect(sessionKey)
     this.d({ type: 'run.start', agent, title: (opts.label || sessionKey) })
     this.d({ type: 'assistant.start', agent })
 
@@ -239,15 +287,15 @@ export class BrokerClient {
       const r = await fetch(base + '/chat', {
         method: 'POST',
         headers: authHeaders(this.cfg.secret, true),
-        credentials: 'same-origin',
+        credentials: 'include',
         body: JSON.stringify({
           message: text,
           agentId: agent,
           sessionKey,
-          agents: opts.agents || [],
         }),
       })
       const j = await r.json().catch(() => ({}))
+      notifyUnauthorized(r)
       if (!r.ok || j.ok === false) throw new Error((j && j.error) || ('HTTP ' + r.status + ' ' + r.statusText))
       this.raw('sys', 'POST /chat ok / agent=' + agent + ' / session=' + sessionKey + ' / runId=' + (j.runId || '?'))
     } catch (err) {
