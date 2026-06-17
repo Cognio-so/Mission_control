@@ -5,8 +5,8 @@ export const DEMO_SKILLS = [
   {
     id: 'deep-research', name: 'Deep Research', category: 'Research',
     summary: 'Fan-out web search, fetch sources, adversarially verify, synthesize a cited report.',
-    tags: ['web', 'research', 'citations'], author: 'openclaw', installs: 1284, rating: 4.8,
-    status: 'available', sourceUrl: 'https://github.com/openclaw/skills/tree/main/deep-research',
+    tags: ['web', 'research', 'citations'], author: 'Cognio', installs: 1284, rating: 4.8,
+    status: 'available', sourceUrl: 'https://github.com/Cognio-so/skills/tree/main/deep-research',
   },
   {
     id: 'seo-content-sprint', name: 'SEO Content Sprint', category: 'Marketing',
@@ -17,14 +17,14 @@ export const DEMO_SKILLS = [
   {
     id: 'competitor-intel', name: 'Competitor Intel', category: 'Research',
     summary: 'Continuously monitor competitors and brief the team on positioning shifts.',
-    tags: ['intel', 'monitoring'], author: 'openclaw', installs: 489, rating: 4.5,
-    status: 'available', sourceUrl: 'https://github.com/openclaw/skills/tree/main/competitor-intel',
+    tags: ['intel', 'monitoring'], author: 'Cognio', installs: 489, rating: 4.5,
+    status: 'available', sourceUrl: 'https://github.com/Cognio-so/skills/tree/main/competitor-intel',
   },
   {
     id: 'pr-reviewer', name: 'PR Reviewer', category: 'Engineering',
     summary: 'Review diffs for correctness bugs and reuse/simplification cleanups with adversarial verification.',
-    tags: ['code', 'review', 'github'], author: 'openclaw', installs: 2310, rating: 4.9,
-    status: 'available', sourceUrl: 'https://github.com/openclaw/skills/tree/main/pr-reviewer',
+    tags: ['code', 'review', 'github'], author: 'Cognio', installs: 2310, rating: 4.9,
+    status: 'available', sourceUrl: 'https://github.com/Cognio-so/skills/tree/main/pr-reviewer',
   },
   {
     id: 'data-extractor', name: 'Data Extractor', category: 'Data',
@@ -42,9 +42,9 @@ export const DEMO_SKILLS = [
 
 export const DEMO_PACKS = [
   {
-    id: 'openclaw-core', name: 'OpenClaw Core', packLabel: 'openclaw/skills',
-    description: 'The official starter pack — research, review, and data skills maintained by the OpenClaw team.',
-    sourceUrl: 'https://github.com/openclaw/skills', skillCount: 12, status: 'published',
+    id: 'cognio-core', name: 'Cognio Core', packLabel: 'cognio/skills',
+    description: 'The official starter pack for research, review, and data skills maintained by the Cognio team.',
+    sourceUrl: 'https://github.com/Cognio-so/skills', skillCount: 12, status: 'published',
   },
   {
     id: 'algohype-growth', name: 'AlgoHype Growth', packLabel: 'algohype/skills',
@@ -128,7 +128,7 @@ export const DEMO_BOARD_CHAT = [
   {
     id: 'm1', source: 'Lead Agent', role: 'Board lead', created_at: 'Feb 15, 01:12 AM',
     content:
-      '@Abhimanyu — approval raised for **2f2fc011**.\n\n• Approval ID: 87bf...c0f (action_type=review_task, status=pending)\n• PR: openclaw-mission-control/pull/126 is already MERGED to main.\n\nOnce you approve, I’ll proceed directly to marking the task done.',
+      '@Abhimanyu - approval raised for **2f2fc011**.\n\n- Approval ID: 87bf...c0f (action_type=review_task, status=pending)\n- PR: mission-control/pull/126 is already MERGED to main.\n\nOnce you approve, I will proceed directly to marking the task done.',
   },
   {
     id: 'm2', source: 'Backend Engineer', role: 'Generalist', created_at: 'Feb 15, 01:14 AM',
@@ -140,7 +140,7 @@ export const DEMO_BOARD_CHAT = [
 export const DEMO_FEED = [
   {
     id: 'f1', event_type: 'task.comment', author: 'Backend Engineer', role: 'Generated',
-    title: 'openclaw-mission-control PR #136: ci(policy): enforce one DB migration per PR',
+    title: 'mission-control PR #136: ci(policy): enforce one DB migration per PR',
     created_at: 'Feb 15, 01:16 AM',
     message: 'Update: Picked up the #136 webhook triage. Next: adjust scripts/ci/one_migration_per_pr.sh to count only added migration files (per Copilot review comment).',
   },

@@ -56,6 +56,7 @@ export function brokerHost(u) {
 export async function fetchBrokerAgents({ base, secret }) {
   const response = await fetch(trim(base) + '/agents', {
     headers: authHeaders(secret),
+    credentials: 'same-origin',
     cache: 'no-store',
   })
   return unwrapAgents(await readJsonResponse(response))
@@ -65,6 +66,7 @@ export async function createBrokerAgent({ base, secret }, agent) {
   const response = await fetch(trim(base) + '/agents', {
     method: 'POST',
     headers: authHeaders(secret, true),
+    credentials: 'same-origin',
     body: JSON.stringify(agent),
   })
   const data = await readJsonResponse(response)
@@ -75,6 +77,7 @@ export async function updateBrokerAgent({ base, secret }, id, patch) {
   const response = await fetch(trim(base) + '/agents/' + encodeURIComponent(id), {
     method: 'PATCH',
     headers: authHeaders(secret, true),
+    credentials: 'same-origin',
     body: JSON.stringify(patch),
   })
   const data = await readJsonResponse(response)
@@ -85,6 +88,7 @@ export async function deleteBrokerAgent({ base, secret }, id) {
   const response = await fetch(trim(base) + '/agents/' + encodeURIComponent(id), {
     method: 'DELETE',
     headers: authHeaders(secret),
+    credentials: 'same-origin',
   })
   return readJsonResponse(response)
 }
@@ -118,7 +122,7 @@ export class BrokerClient {
     this.status('connecting')
     this.raw('sys', 'broker ' + base + ' / checking /health')
     try {
-      const r = await fetch(base + '/health', { cache: 'no-store' })
+      const r = await fetch(base + '/health', { credentials: 'same-origin', cache: 'no-store' })
       const h = await r.json()
       const g = h.gateway || {}
       this.raw('sys', 'health: gateway ' + (g.connected ? 'connected' : 'down') + ' / scopes=' + JSON.stringify(g.scopes || []) + ' / server ' + (g.serverVersion || '?'))
@@ -126,10 +130,12 @@ export class BrokerClient {
       this.raw('err', '/health failed: ' + e.message)
     }
 
-    const url = base + '/stream?token=' + encodeURIComponent(this.cfg.secret || '')
+    const url = this.cfg.secret
+      ? base + '/stream?token=' + encodeURIComponent(this.cfg.secret)
+      : base + '/stream'
     let es
     try {
-      es = new EventSource(url)
+      es = new EventSource(url, { withCredentials: true })
     } catch (err) {
       this.raw('err', 'EventSource failed: ' + err.message)
       this.status('off')
@@ -233,6 +239,7 @@ export class BrokerClient {
       const r = await fetch(base + '/chat', {
         method: 'POST',
         headers: authHeaders(this.cfg.secret, true),
+        credentials: 'same-origin',
         body: JSON.stringify({
           message: text,
           agentId: agent,

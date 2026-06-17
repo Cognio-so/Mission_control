@@ -128,7 +128,7 @@ function CredentialsCard() {
       </div>
 
       <div className="border-t border-slate-100 px-5 py-3 text-xs text-slate-400">
-        Stored server-side in OpenClaw&apos;s secrets store and loaded into every agent&apos;s environment.
+        Stored server-side in the agent credentials store and loaded into every agent&apos;s environment.
         Values are write-only - once saved they are never sent back to the browser.
       </div>
     </Card>

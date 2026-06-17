@@ -1,37 +1,46 @@
-export const AUTH_STORAGE_KEY = 'cognio_auth_v1'
-
+const BASE = (import.meta.env.VITE_BROKER_URL || '/api').replace(/\/+$/, '')
 const LOGIN_ENABLED = import.meta.env.VITE_LOGIN_ENABLED !== '0'
-const LOGIN_USERNAME = import.meta.env.VITE_LOGIN_USERNAME || ''
-const LOGIN_PASSWORD = import.meta.env.VITE_LOGIN_PASSWORD || ''
+
+async function readAuthResponse(response) {
+  const data = await response.json().catch(() => ({}))
+  if (!response.ok || data?.ok === false) {
+    throw new Error(data?.error || data?.message || 'Authentication failed')
+  }
+  return data
+}
 
 export function isLoginEnabled() {
   return LOGIN_ENABLED
 }
 
-export function isAuthenticated() {
-  if (!LOGIN_ENABLED) return true
-  try {
-    return localStorage.getItem(AUTH_STORAGE_KEY) === 'authenticated'
-  } catch {
-    return false
-  }
+export async function getSession() {
+  if (!LOGIN_ENABLED) return { authenticated: true }
+  const response = await fetch(BASE + '/session', {
+    credentials: 'same-origin',
+    cache: 'no-store',
+  })
+  if (response.status === 401) return { authenticated: false }
+  return readAuthResponse(response)
 }
 
-export function authenticate(username, password) {
-  if (!LOGIN_ENABLED) return true
-  if (!LOGIN_USERNAME || !LOGIN_PASSWORD) return false
-  const ok = String(username) === LOGIN_USERNAME && String(password) === LOGIN_PASSWORD
-  if (ok) {
-    try {
-      localStorage.setItem(AUTH_STORAGE_KEY, 'authenticated')
-    } catch { /* ignore storage failures */ }
-  }
-  return ok
+export async function login(username, password) {
+  if (!LOGIN_ENABLED) return { authenticated: true }
+  const response = await fetch(BASE + '/login', {
+    method: 'POST',
+    credentials: 'same-origin',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ username, password }),
+  })
+  await readAuthResponse(response)
+  return getSession()
 }
 
-export function signOut() {
-  try {
-    localStorage.removeItem(AUTH_STORAGE_KEY)
-  } catch { /* ignore storage failures */ }
+export async function signOut() {
+  if (LOGIN_ENABLED) {
+    await fetch(BASE + '/logout', {
+      method: 'POST',
+      credentials: 'same-origin',
+    }).catch(() => {})
+  }
   window.dispatchEvent(new Event('cognio-auth-change'))
 }

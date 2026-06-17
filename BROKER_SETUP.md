@@ -43,19 +43,17 @@ on the VPS with:
 
 ```env
 VITE_BROKER_URL=/api
-VITE_BROKER_SECRET=<same value as broker BROKER_SECRET>
+VITE_BROKER_SECRET=
 VITE_ORCHESTRATOR_SESSION=main
 VITE_DEMO=0
 VITE_USE_DEMO_DATA=0
 VITE_LOGIN_ENABLED=1
-VITE_LOGIN_USERNAME=<dashboard username>
-VITE_LOGIN_PASSWORD=<dashboard password>
 ```
 
-The browser bundle still contains `VITE_BROKER_SECRET` and the fixed
-`VITE_LOGIN_*` credentials. Treat the React login as a convenience screen, not a
-security boundary. Put the dashboard behind Traefik BasicAuth, OIDC, or another
-server-side access control layer if it is reachable from the public internet.
+Preferred auth is broker session-cookie auth: React posts credentials to
+`/api/login`, the broker sets an HttpOnly cookie, and the frontend never receives
+`BROKER_SECRET`. Only set `VITE_BROKER_SECRET=<BROKER_SECRET>` for a legacy broker
+that has not implemented session-cookie auth yet.
 
 ## Inputs for each user
 
@@ -189,13 +187,11 @@ cd openclaw-ui
 npm ci
 cat > .env.local <<EOF
 VITE_BROKER_URL=/api
-VITE_BROKER_SECRET=$BROKER_SECRET
+VITE_BROKER_SECRET=
 VITE_ORCHESTRATOR_SESSION=main
 VITE_DEMO=0
 VITE_USE_DEMO_DATA=0
 VITE_LOGIN_ENABLED=1
-VITE_LOGIN_USERNAME=<dashboard username>
-VITE_LOGIN_PASSWORD=<dashboard password>
 EOF
 npm run build
 ```
@@ -509,8 +505,6 @@ FRONTEND_CLONE_DIR=/docker/mission-control
 FRONTEND_REPO_URL=https://github.com/Cognio-so/Mission_control.git
 DASHBOARD_DOMAIN=dashboard.srv1760992.hstgr.cloud
 FRONTEND_APP_SUBDIR=openclaw-ui
-DASHBOARD_LOGIN_USERNAME=<dashboard username>
-DASHBOARD_LOGIN_PASSWORD=<dashboard password>
 ```
 
 If this is a branded domain such as `mission.cognio.so`, create a DNS-only A record
@@ -566,12 +560,21 @@ FRONTEND_CLONE_DIR=/docker/mission-control
 FRONTEND_REPO_URL=https://github.com/Cognio-so/Mission_control.git
 DASHBOARD_DOMAIN=dashboard.srv1760992.hstgr.cloud
 FRONTEND_APP_SUBDIR=openclaw-ui
-DASHBOARD_LOGIN_USERNAME=<dashboard username>
-DASHBOARD_LOGIN_PASSWORD=<dashboard password>
 
 Required final routing:
 https://DASHBOARD_DOMAIN/      -> frontend container
 https://DASHBOARD_DOMAIN/api/* -> existing broker service on port 8787, strip /api
+
+Required final auth:
+- React renders the styled login page.
+- POST /api/login validates username/password on the broker and sets an HttpOnly
+  Secure SameSite=Lax session cookie.
+- GET /api/session reports whether the browser has a valid session.
+- POST /api/logout clears the cookie.
+- Protected /api routes accept the session cookie.
+- The frontend bundle must not contain BROKER_SECRET.
+- Temporary Traefik BasicAuth may stay during migration, but remove it after
+  broker session-cookie auth and the React login are verified.
 
 Step 1: Inspect current setup
 Run:
@@ -622,15 +625,15 @@ OPENCLAW_PROJECT_DIR/.env
 Create this file inside the frontend app folder:
 
 VITE_BROKER_URL=/api
-VITE_BROKER_SECRET=<BROKER_SECRET from OPENCLAW_PROJECT_DIR/.env>
+VITE_BROKER_SECRET=
 VITE_ORCHESTRATOR_SESSION=main
 VITE_DEMO=0
 VITE_USE_DEMO_DATA=0
 VITE_LOGIN_ENABLED=1
-VITE_LOGIN_USERNAME=DASHBOARD_LOGIN_USERNAME
-VITE_LOGIN_PASSWORD=DASHBOARD_LOGIN_PASSWORD
 
 Do not commit .env.local.
+Do not bake BROKER_SECRET into the frontend when broker session-cookie auth is enabled.
+Only use VITE_BROKER_SECRET for a temporary legacy Bearer-token migration.
 
 Step 6: Add frontend nginx config
 Create nginx-spa.conf inside frontend app folder:

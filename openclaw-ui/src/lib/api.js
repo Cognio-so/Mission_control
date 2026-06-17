@@ -16,7 +16,7 @@ function headers(json = false) {
 }
 
 async function brokerGet(path) {
-  const r = await fetch(BASE + path, { headers: headers(), cache: 'no-store' })
+  const r = await fetch(BASE + path, { headers: headers(), credentials: 'same-origin', cache: 'no-store' })
   if (!r.ok) throw new Error('HTTP ' + r.status)
   return r.json()
 }
@@ -25,6 +25,7 @@ async function brokerSend(path, method, body, raw = false) {
   const r = await fetch(BASE + path, {
     method,
     headers: headers(!raw),
+    credentials: 'same-origin',
     body: body == null ? undefined : raw ? body : JSON.stringify(body),
   })
   if (!r.ok) {
