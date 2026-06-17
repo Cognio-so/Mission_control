@@ -4,13 +4,16 @@ import { BrowserRouter } from 'react-router-dom'
 import './index.css'
 import App from './App.jsx'
 import { MissionProvider } from './store/mission.jsx'
+import { LoginGate } from './components/auth/LoginGate.jsx'
 
 createRoot(document.getElementById('root')).render(
   <React.StrictMode>
     <BrowserRouter>
-      <MissionProvider>
-        <App />
-      </MissionProvider>
+      <LoginGate>
+        <MissionProvider>
+          <App />
+        </MissionProvider>
+      </LoginGate>
     </BrowserRouter>
   </React.StrictMode>,
 )

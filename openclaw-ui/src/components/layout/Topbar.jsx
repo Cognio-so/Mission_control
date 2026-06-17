@@ -1,7 +1,8 @@
-import { RefreshCw, Wifi, WifiOff, Loader2 } from 'lucide-react'
+import { LogOut, RefreshCw, Wifi, WifiOff, Loader2 } from 'lucide-react'
 import { motion } from 'framer-motion'
 import { BrandMark } from '../atoms/BrandMark.jsx'
 import { brokerHost } from '../../broker.js'
+import { signOut } from '../../lib/auth.js'
 import { cn } from '../../lib/utils.js'
 import { useMission } from '../../store/mission.jsx'
 
@@ -60,6 +61,15 @@ export function Topbar() {
           >
             <RefreshCw className={cn('h-3.5 w-3.5', agentsLoading && 'animate-spin')} />
             Refresh
+          </button>
+
+          <button
+            onClick={signOut}
+            title="Sign out"
+            aria-label="Sign out"
+            className="grid h-9 w-9 place-items-center rounded-full border border-slate-200 bg-white text-slate-500 transition hover:border-rose-200 hover:bg-rose-50 hover:text-rose-600"
+          >
+            <LogOut className="h-4 w-4" />
           </button>
         </div>
       </div>

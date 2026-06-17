@@ -119,6 +119,20 @@ export const Api = {
     }))
   },
 
+  // ---- Credentials / secrets (write-only; GET returns key names only, never values) ----
+  secrets: {
+    async list() {
+      const data = await brokerGet('/secrets')
+      return { file: data.file || 'global.env', keys: Array.isArray(data.keys) ? data.keys : [] }
+    },
+    add(key, value) {
+      return brokerSend('/secrets', 'POST', { key, value })
+    },
+    remove(key) {
+      return brokerSend('/secrets/' + encodeURIComponent(key), 'DELETE')
+    },
+  },
+
   // ---- Agent memory / files (live, per the VPS broker REST shapes) ----
   agentFiles: {
     async list(agentId) {
