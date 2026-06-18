@@ -1,12 +1,13 @@
 import { useEffect, useMemo, useRef, useState } from 'react'
 import { AnimatePresence, motion } from 'framer-motion'
-import { Plus, Pencil, Trash2, Eraser, Send, Terminal, Sparkles, MessageSquarePlus, ChevronDown, History } from 'lucide-react'
+import { Plus, Pencil, Trash2, Eraser, Send, Terminal, Sparkles, MessageSquarePlus, ChevronDown, History, Paperclip, X, FileText } from 'lucide-react'
 import { ORCH_ID, newAgentTemplate } from '../agents.js'
 import { cn, cleanIcon, initials } from '../lib/utils.js'
 import { cleanChatText } from '../lib/chatText.js'
 import { dedupeMessages } from '../store/reducer.js'
 import { useMission } from '../store/mission.jsx'
 import { AgentModal } from '../components/agents/AgentModal.jsx'
+import { AgentFilesDialog } from '../components/agents/AgentFilesDialog.jsx'
 import { StatusDot } from '../components/atoms/StatusDot.jsx'
 import { Markdown } from '../components/atoms/Markdown.jsx'
 import { Badge } from '../components/ui/badge.jsx'
@@ -82,8 +83,16 @@ export default function MissionPage() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [agents, agentsById, state.threads, savedChats, teamMeta])
 
+  const liveAgentIds = useMemo(
+    () => new Set(inferActiveAgentCallsFromTimeline(state.timeline, agents, anyRunning).map(({ agent }) => agent.id)),
+    [state.timeline, agents, anyRunning],
+  )
+
   const [composer, setComposer] = useState('')
+  const [effort, setEffort] = useState('medium')
+  const [files, setFiles] = useState([])
   const [agentModal, setAgentModal] = useState(null)
+  const [filesAgent, setFilesAgent] = useState(null)
   const [rawOpen, setRawOpen] = useState(false)
   const [collapsed, setCollapsed] = useState({})
   const isMain = active?.id === ORCH_ID
@@ -92,6 +101,7 @@ export default function MissionPage() {
   const tlRef = useRef(null)
   const rawRef = useRef(null)
   const taRef = useRef(null)
+  const fileRef = useRef(null)
 
   useEffect(() => { if (chatRef.current) chatRef.current.scrollTop = chatRef.current.scrollHeight }, [thread.messages, selectedId])
   useEffect(() => { if (tlRef.current) tlRef.current.scrollTop = tlRef.current.scrollHeight }, [state.timeline])
@@ -103,21 +113,25 @@ export default function MissionPage() {
 
   const send = () => {
     const t = composer.trim()
-    if (!t) return
+    if (!t && !files.length) return
+    const picked = files
     setComposer('')
-    sendText(t, selectedId)
+    setFiles([])
+    if (fileRef.current) fileRef.current.value = ''
+    sendText(t, selectedId, effort, picked)
   }
   const onKey = (e) => { if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); send() } }
-  const insertMention = (id) => { setComposer((c) => (c ? c.replace(/\s*$/, ' ') : '') + '@' + id + ' '); taRef.current?.focus() }
+  const addFiles = (list) => setFiles((prev) => [...prev, ...Array.from(list || []).filter(Boolean)].slice(0, 10))
+  const removeFile = (index) => setFiles((prev) => prev.filter((_, i) => i !== index))
 
   const onSave = async (agent, mode) => {
     try { await saveAgent(agent, mode); setAgentModal(null) } catch { /* status shown in store */ }
   }
 
   return (
-    <div className="grid h-[calc(100vh-61px)] grid-cols-1 lg:grid-cols-[280px_1fr_360px]">
+    <div className="grid h-full min-h-0 overflow-hidden grid-cols-1 lg:grid-cols-[280px_1fr_360px]">
       {/* ---- Roster ---- */}
-      <aside className="hidden flex-col border-r border-slate-200 bg-white lg:flex">
+      <aside className="hidden min-h-0 overflow-hidden flex-col border-r border-slate-200 bg-white lg:flex">
         {/* fixed top */}
         <div className="space-y-3 p-4 pb-2">
           <Button className="w-full" onClick={() => setAgentModal({ mode: 'new', agent: newAgentTemplate() })}>
@@ -137,30 +151,32 @@ export default function MissionPage() {
         </div>
 
         {/* team tree — scrolls in its own area so all agents are reachable */}
-        <div className="min-h-0 flex-1 space-y-3 overflow-y-auto px-4 pb-3 scrollbar-thin">
+        <div className="min-h-0 flex-1 space-y-3 overflow-y-auto overscroll-contain px-4 pb-3 scrollbar-thin">
         <div>
           <SectionLabel>Central</SectionLabel>
-          <button
-            onClick={() => setActiveId(ORCH_ID)}
+          <div
             className={cn(
-              'mt-1.5 flex w-full items-center gap-3 rounded-2xl border px-3 py-3 text-left shadow-sm transition',
+              'group mt-1.5 flex w-full items-center gap-3 rounded-2xl border px-3 py-3 text-left shadow-sm transition',
               selectedId === ORCH_ID
                 ? 'border-[color:var(--accent)] bg-[color:var(--accent-soft)] shadow-[0_14px_34px_rgba(64,163,148,0.18)]'
                 : 'border-[color:var(--border)] bg-white hover:border-[color:var(--accent)] hover:bg-[#f8f2e7]',
             )}
           >
-            <div className={cn('grid h-10 w-10 shrink-0 place-items-center rounded-xl bg-gradient-to-br from-[color:var(--accent)] to-[color:var(--accent-strong)] text-[11px] font-bold text-white', mainThread.running && 'animate-pulse-ring')}>
-              {cleanIcon(orchestrator?.icon, 'CG')}
-            </div>
-            <div className="min-w-0 flex-1">
-              <div className="flex items-center gap-2">
-                <span className="truncate text-sm font-semibold text-strong">Main</span>
-                <span className="shrink-0 rounded-full bg-white/70 px-2 py-0.5 text-[9px] font-bold uppercase tracking-[0.18em] text-[color:var(--accent-strong)]">Global</span>
+            <button onClick={() => setActiveId(ORCH_ID)} className="flex min-w-0 flex-1 items-center gap-3 text-left">
+              <div className={cn('grid h-10 w-10 shrink-0 place-items-center rounded-xl bg-gradient-to-br from-[color:var(--accent)] to-[color:var(--accent-strong)] text-[11px] font-bold text-white', mainThread.running && 'animate-pulse-ring')}>
+                {cleanIcon(orchestrator?.icon, 'CG')}
               </div>
-              <div className="truncate text-[11px] text-muted">Chat with the central controller</div>
-            </div>
+              <div className="min-w-0 flex-1">
+                <div className="flex items-center gap-2">
+                  <span className="truncate text-sm font-semibold text-strong">Main</span>
+                  <span className="shrink-0 rounded-full bg-white/70 px-2 py-0.5 text-[9px] font-bold uppercase tracking-[0.18em] text-[color:var(--accent-strong)]">Global</span>
+                </div>
+                <div className="truncate text-[11px] text-muted">Chat with the central controller</div>
+              </div>
+            </button>
+            <IconBtn onClick={(e) => { e.stopPropagation(); setFilesAgent({ id: ORCH_ID, name: 'Main' }) }}><Pencil className="h-3 w-3" /></IconBtn>
             <StatusDot status={mainThread.running ? 'running' : mainThread.messages.length ? 'ready' : 'idle'} pulse={mainThread.running} />
-          </button>
+          </div>
         </div>
 
         {false && recent.length > 0 && (
@@ -223,7 +239,8 @@ export default function MissionPage() {
         {teams.map((team) => {
           const o = team.orchestrator
           const oT = getThread(o.id)
-          const oDot = oT.running ? 'running' : oT.messages.length ? 'ready' : o.status || 'idle'
+          const oLive = liveAgentIds.has(o.id)
+          const oDot = oLive ? 'running' : oT.running ? 'running' : oT.messages.length ? 'ready' : o.status || 'idle'
           const isCollapsed = collapsed[team.id]
           return (
             <div key={team.id} className="overflow-hidden rounded-2xl border border-slate-200 bg-white shadow-sm">
@@ -254,7 +271,7 @@ export default function MissionPage() {
                 </button>
                 <StatusDot status={oDot} pulse={oT.running} />
                 <div className="flex gap-1 opacity-0 transition group-hover:opacity-100">
-                  <IconBtn onClick={(e) => { e.stopPropagation(); setAgentModal({ mode: 'edit', agent: o }) }}><Pencil className="h-3 w-3" /></IconBtn>
+                  <IconBtn onClick={(e) => { e.stopPropagation(); setFilesAgent({ id: o.id, name: o.name }) }}><Pencil className="h-3 w-3" /></IconBtn>
                   {o.id !== ORCH_ID && <IconBtn danger onClick={(e) => { e.stopPropagation(); deleteAgent(o.id) }}><Trash2 className="h-3 w-3" /></IconBtn>}
                 </div>
               </div>
@@ -267,7 +284,8 @@ export default function MissionPage() {
                     <div className="py-2 pl-1 text-[11px] text-slate-400">No subagents yet.</div>
                   ) : team.members.map((m) => {
                     const t = getThread(m.id)
-                    const dot = t.running ? 'running' : t.messages.length ? 'ready' : m.status || 'idle'
+                    const mLive = liveAgentIds.has(m.id)
+                    const dot = mLive ? 'running' : t.running ? 'running' : t.messages.length ? 'ready' : m.status || 'idle'
                     return (
                       <div key={m.id} className="relative">
                         <span className="absolute -left-[6px] top-1/2 h-px w-2.5 bg-slate-200" />
@@ -284,7 +302,7 @@ export default function MissionPage() {
                           </button>
                           <StatusDot status={dot} pulse={t.running} />
                           <div className="flex gap-1 opacity-0 transition group-hover:opacity-100">
-                            <IconBtn onClick={(e) => { e.stopPropagation(); setAgentModal({ mode: 'edit', agent: m }) }}><Pencil className="h-3 w-3" /></IconBtn>
+                          <IconBtn onClick={(e) => { e.stopPropagation(); setFilesAgent({ id: m.id, name: m.name }) }}><Pencil className="h-3 w-3" /></IconBtn>
                             <IconBtn danger onClick={(e) => { e.stopPropagation(); deleteAgent(m.id) }}><Trash2 className="h-3 w-3" /></IconBtn>
                           </div>
                         </div>
@@ -330,7 +348,7 @@ export default function MissionPage() {
       </aside>
 
       {/* ---- Chat ---- */}
-      <section className="flex min-h-0 min-w-0 flex-col bg-slate-50">
+      <section className="flex min-h-0 min-w-0 overflow-hidden flex-col bg-slate-50">
         <header className="flex items-center gap-3 border-b border-slate-200 bg-white px-5 py-3">
           <div className="grid h-10 w-10 place-items-center rounded-xl bg-gradient-to-br from-[color:var(--accent)] to-[color:var(--accent-strong)] text-xs font-bold text-white">
             {cleanIcon(active?.icon, initials(active?.name))}
@@ -346,7 +364,7 @@ export default function MissionPage() {
           </div>
           <Button variant="secondary" size="sm" onClick={() => newChat(selectedId)} title="Start a new chat (fresh session)"><MessageSquarePlus className="h-4 w-4" /> New chat</Button>
           <Button variant="ghost" size="sm" onClick={() => clearThread(selectedId)} title="Clear thread"><Eraser className="h-4 w-4" /></Button>
-          {!isMain && <Button variant="ghost" size="sm" onClick={() => setAgentModal({ mode: 'edit', agent: active })} title="Edit"><Pencil className="h-4 w-4" /></Button>}
+          <Button variant="ghost" size="sm" onClick={() => setFilesAgent({ id: active.id, name: active.name })} title={isMain ? 'Open main markdown' : 'Open agent markdown'}><Pencil className="h-4 w-4" /></Button>
           {!isMain && (
             <Button variant="ghost" size="sm" className="text-rose-600 hover:bg-rose-50" onClick={() => deleteAgent(active.id)} title="Delete"><Trash2 className="h-4 w-4" /></Button>
           )}
@@ -354,34 +372,68 @@ export default function MissionPage() {
 
         <div ref={chatRef} className="min-h-0 min-w-0 flex-1 space-y-4 overflow-y-auto px-5 py-6 scrollbar-thin">
           {thread.messages.length === 0 ? (
-            <EmptyState active={active} onPick={sendText} />
+            <EmptyState active={active} onPick={(text) => sendText(text, selectedId, effort)} />
           ) : (
             dedupeMessages(thread.messages).map((msg) => <ChatBubble key={msg.id} m={msg} active={active} />)
           )}
         </div>
 
         <div className="border-t border-slate-200 bg-white px-5 py-3">
-          {isMain && roster.length > 0 && (
-            <div className="mb-2 flex flex-wrap items-center gap-2">
-              <span className="text-[11px] font-semibold uppercase tracking-wide text-slate-400">Delegate</span>
-              {roster.map((a) => (
-                <button
-                  key={a.id} onClick={() => insertMention(a.id)} title={'@' + a.id}
-                  className="inline-flex items-center gap-1.5 rounded-full border border-slate-200 bg-slate-50 px-2.5 py-1 text-xs font-medium text-slate-600 transition hover:border-[color:var(--accent)] hover:text-[color:var(--accent)]"
+          {files.length > 0 && (
+            <div className="mb-2 flex flex-wrap gap-2">
+              {files.map((file, index) => (
+                <span
+                  key={file.name + '_' + index}
+                  className="inline-flex min-w-0 max-w-[220px] items-center gap-1.5 rounded-full border border-[color:var(--border)] bg-[#fffaf0] px-2.5 py-1 text-xs font-medium text-slate-600"
                 >
-                  <span className="grid h-4 w-4 place-items-center rounded bg-white text-[9px] font-bold text-slate-500">{cleanIcon(a.icon, initials(a.name))}</span>
-                  {a.name.split(' ')[0]}
-                </button>
+                  <FileText className="h-3.5 w-3.5 shrink-0 text-[color:var(--accent)]" />
+                  <span className="truncate">{file.name}</span>
+                  <button
+                    type="button"
+                    onClick={() => removeFile(index)}
+                    title="Remove file"
+                    className="grid h-4 w-4 shrink-0 place-items-center rounded-full text-slate-400 transition hover:bg-rose-50 hover:text-rose-600"
+                  >
+                    <X className="h-3 w-3" />
+                  </button>
+                </span>
               ))}
             </div>
           )}
           <div className="flex items-end gap-2 rounded-2xl border border-slate-200 bg-white p-2 shadow-sm focus-within:ring-2 focus-within:ring-[color:var(--accent)]">
+            <input
+              ref={fileRef}
+              type="file"
+              multiple
+              className="hidden"
+              onChange={(e) => addFiles(e.target.files)}
+            />
+            <Button
+              type="button"
+              variant="ghost"
+              size="sm"
+              onClick={() => fileRef.current?.click()}
+              title="Attach files"
+              className="shrink-0"
+            >
+              <Paperclip className="h-4 w-4" />
+            </Button>
             <textarea
               ref={taRef} rows={1} value={composer} onChange={(e) => setComposer(e.target.value)} onKeyDown={onKey}
               placeholder={isMain ? 'Ask Main to coordinate your teams and agents' : 'Message ' + (active?.name || 'agent')}
               className="max-h-40 flex-1 resize-none bg-transparent px-3 py-2 text-sm text-strong placeholder:text-slate-400 focus:outline-none"
             />
-            <Button onClick={send} disabled={thread.running} className="shrink-0">
+            <select
+              value={effort}
+              onChange={(e) => setEffort(e.target.value)}
+              title="Reasoning effort"
+              className="h-10 shrink-0 rounded-xl border border-slate-200 bg-white px-2 text-xs font-medium text-slate-600 outline-none transition hover:border-[color:var(--accent)] focus:border-[color:var(--accent)] focus:ring-2 focus:ring-[color:var(--accent-soft)]"
+            >
+              {['off', 'minimal', 'low', 'medium', 'high', 'xhigh'].map((x) => (
+                <option key={x} value={x}>{x}</option>
+              ))}
+            </select>
+            <Button onClick={send} disabled={thread.running || (!composer.trim() && !files.length)} className="shrink-0">
               <Send className="h-4 w-4" /> Run
             </Button>
           </div>
@@ -390,7 +442,7 @@ export default function MissionPage() {
       </section>
 
       {/* ---- Mission panel ---- */}
-      <aside className="hidden min-h-0 flex-col border-l border-slate-200 bg-white lg:flex">
+      <aside className="hidden min-h-0 overflow-hidden flex-col border-l border-slate-200 bg-white lg:flex">
         <div className="flex items-center justify-between border-b border-slate-200 px-5 py-3">
           <div>
             <div className="text-sm font-semibold text-strong">Mission Control</div>
@@ -401,7 +453,7 @@ export default function MissionPage() {
           </Button>
         </div>
 
-        <RunGraph orchestrator={orchestrator} teams={teams} active={active} activeRunning={thread.running} timeline={state.timeline} running={anyRunning} conn={state.conn} />
+        <RunGraph orchestrator={orchestrator} agents={agents} teams={teams} active={active} activeRunning={thread.running} timeline={state.timeline} running={anyRunning} conn={state.conn} />
 
         <div ref={tlRef} className="min-h-0 flex-1 space-y-2 overflow-y-auto px-4 py-4 scrollbar-thin">
           {state.timeline.length === 0 ? (
@@ -434,6 +486,9 @@ export default function MissionPage() {
           onDelete={agentModal.mode === 'edit' && agentModal.agent.id !== ORCH_ID ? async () => { if (await deleteAgent(agentModal.agent.id)) setAgentModal(null) } : null}
           onClose={() => setAgentModal(null)}
         />
+      )}
+      {filesAgent && (
+        <AgentFilesDialog agentId={filesAgent.id} agentName={filesAgent.name} onClose={() => setFilesAgent(null)} />
       )}
     </div>
   )
@@ -570,15 +625,115 @@ function EmptyState({ active, onPick }) {
   )
 }
 
-function RunGraph({ orchestrator, teams = [], active, activeRunning, timeline, running, conn }) {
+function currentRunSlice(timeline, running) {
+  if (!running) return []
+  const lastStart = timeline.reduce((idx, item, i) => (
+    item.kind === 'divider' && !/^run (complete|failed)$/i.test(String(item.text || '').trim()) ? i : idx
+  ), -1)
+  return lastStart < 0 ? timeline : timeline.slice(lastStart + 1)
+}
+
+function agentWords(value) {
+  return String(value || '')
+    .replace(/([a-z])([A-Z])/g, '$1 $2')
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/g, ' ')
+    .trim()
+}
+
+function scoreAgentMention(agent, text) {
+  if (!agent || agent.id === ORCH_ID || !text) return 0
+  const hay = agentWords(text)
+  const compactHay = hay.replace(/\s+/g, '')
+  const id = String(agent.id || '').toLowerCase()
+  const name = agentWords(agent.name)
+  const compactName = name.replace(/\s+/g, '')
+  const team = agentWords(agent.team)
+  const role = agentWords(agent.role)
+  let score = 0
+
+  if (id && text.toLowerCase().includes(id)) score += 140
+  if (compactName && compactHay.includes(compactName)) score += 120
+  if (name && hay.includes(name)) score += 90
+  if (team && team.length > 2 && hay.includes(team)) score += agent.kind === 'orchestrator' ? 58 : 34
+
+  const generic = new Set(['agent', 'ai', 'seo', 'team', 'lead', 'specialist', 'orchestrator', 'the', 'and', 'for'])
+  for (const word of name.split(/\s+/).filter((w) => w.length > 2 && !generic.has(w))) {
+    if (hay.includes(word)) score += 28
+  }
+  for (const word of role.split(/\s+/).filter((w) => w.length > 4 && !generic.has(w)).slice(0, 6)) {
+    if (hay.includes(word)) score += 8
+  }
+  if (agent.kind === 'orchestrator' && /\b(team|director|orchestrator|lead|coordinate|marketing agent)\b/.test(hay)) score += 18
+  if (agent.kind !== 'orchestrator' && /\b(specialist|subagent|sub agent)\b/.test(hay)) score += 8
+  return score
+}
+
+function bestAgentForText(agents, text) {
+  let best = null
+  let bestScore = 0
+  for (const agent of agents || []) {
+    const score = scoreAgentMention(agent, text)
+    if (score > bestScore) {
+      best = agent
+      bestScore = score
+    }
+  }
+  return bestScore >= 34 ? best : null
+}
+
+function timelineText(item) {
+  return [
+    item.key, item.title, item.head, item.sub, item.stream, item.result, item.pre, item.tag, item.status,
+  ].filter(Boolean).join(' ')
+}
+
+function inferActiveAgentCallsFromTimeline(timeline, agents, running) {
+  const calls = new Map()
+  for (const item of currentRunSlice(timeline, running)) {
+    if (item.kind === 'sub') {
+      const agent = bestAgentForText(agents, timelineText(item))
+      if (agent) {
+        calls.set(agent.id, {
+          agent,
+          event: { ...item, key: item.key || 'sub_' + agent.id, badge: item.badge || 'running' },
+        })
+      }
+      continue
+    }
+    if (item.kind !== 'node') continue
+    const text = timelineText(item)
+    const looksLikeDelegation = /\b(delegate|delegated|subagent|sub agent|registered agent|agent id|work from|director|orchestrator|specialist)\b/i.test(text)
+    const agent = bestAgentForText(agents, text)
+    if (!agent || (!looksLikeDelegation && scoreAgentMention(agent, text) < 70)) continue
+    calls.set(agent.id, {
+      agent,
+      event: {
+        ...item,
+        key: 'op_' + agent.id,
+        title: agent.name,
+        badge: 'running',
+        sub: item.sub?.includes('progressText') ? 'Delegated run in progress' : item.sub || 'Delegated run',
+      },
+    })
+  }
+  return Array.from(calls.values())
+}
+
+function RunGraph({ orchestrator, agents = [], teams = [], active, activeRunning, timeline, running, conn }) {
   const allAgents = useMemo(() => {
-    const list = [orchestrator]
+    const list = [orchestrator, ...agents]
     for (const team of teams || []) {
       if (team?.orchestrator) list.push(team.orchestrator)
       for (const member of team?.members || []) if (member) list.push(member)
     }
-    return list.filter(Boolean)
-  }, [orchestrator, teams])
+    const seen = new Set()
+    return list.filter((agent) => {
+      if (!agent?.id || seen.has(agent.id)) return false
+      seen.add(agent.id)
+      return true
+    })
+  }, [orchestrator, agents, teams])
 
   const agentLookup = useMemo(() => {
     const m = new Map()
@@ -590,14 +745,7 @@ function RunGraph({ orchestrator, teams = [], active, activeRunning, timeline, r
     return m
   }, [allAgents])
 
-  const currentSlice = useMemo(() => {
-    if (!running) return []
-    const lastStart = timeline.reduce((idx, item, i) => (
-      item.kind === 'divider' && !/^run (complete|failed)$/i.test(String(item.text || '').trim()) ? i : idx
-    ), -1)
-    if (lastStart < 0) return timeline
-    return timeline.slice(lastStart + 1)
-  }, [timeline, running])
+  const currentSlice = useMemo(() => currentRunSlice(timeline, running), [timeline, running])
 
   const delegated = currentSlice.filter((t) => t.kind === 'sub')
   const activeCalls = useMemo(() => {
@@ -616,8 +764,13 @@ function RunGraph({ orchestrator, teams = [], active, activeRunning, timeline, r
         { id: item.key || item.id, name: item.title || item.key || 'Agent', icon: item.icon || 'AI', role: item.sub || 'Delegated task' }
       byKey.set(key, { event: item, agent })
     }
+    for (const call of inferActiveAgentCallsFromTimeline(timeline, allAgents, running)) {
+      if (!Array.from(byKey.values()).some((entry) => entry.agent?.id === call.agent.id)) {
+        byKey.set('op_' + call.agent.id, call)
+      }
+    }
     return Array.from(byKey.values())
-  }, [delegated, agentLookup, allAgents])
+  }, [delegated, agentLookup, allAgents, timeline, running])
 
   const directAgentRunning = activeRunning && active?.id && active.id !== ORCH_ID && activeCalls.length === 0
   const nodes = activeCalls

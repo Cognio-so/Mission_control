@@ -274,6 +274,31 @@ export class BrokerClient {
     this.d({ type: 'node', node: { cls: 'tool', head: 'Operation / ' + label, tag: 'event', sub: shortJson(payload) } })
   }
 
+  async uploadFiles(files, opts = {}) {
+    const selected = Array.from(files || []).filter(Boolean)
+    if (!selected.length) return []
+
+    const base = trim(this.cfg.base)
+    const sessionKey = opts.sessionKey || this.cfg.session || 'main'
+    const fd = new FormData()
+    for (const file of selected) fd.append('file', file)
+    if (opts.agentId) fd.append('agentId', opts.agentId)
+    if (sessionKey) fd.append('sessionKey', sessionKey)
+
+    const headers = authHeaders(this.cfg.secret)
+    if (sessionKey) headers['X-Session-Key'] = sessionKey
+    const r = await fetch(base + '/uploads', {
+      method: 'POST',
+      headers,
+      credentials: 'include',
+      body: fd,
+    })
+    const j = await r.json().catch(() => ({}))
+    notifyUnauthorized(r)
+    if (!r.ok || j.ok === false) throw new Error(j.error || j.message || ('HTTP ' + r.status + ' ' + r.statusText))
+    return Array.isArray(j.files) ? j.files : []
+  }
+
   async sendMessage(text, opts = {}) {
     const base = trim(this.cfg.base)
     const sessionKey = opts.sessionKey || this.cfg.session || 'main'
@@ -292,6 +317,8 @@ export class BrokerClient {
           message: text,
           agentId: agent,
           sessionKey,
+          effort: opts.effort,
+          attachments: opts.attachments,
         }),
       })
       const j = await r.json().catch(() => ({}))

@@ -1,22 +1,30 @@
 import { useEffect, useRef, useState } from 'react'
 import { motion } from 'framer-motion'
-import { Send } from 'lucide-react'
+import { FileText, Paperclip, Send, X } from 'lucide-react'
 import { Button } from '../ui/button.jsx'
 import { Markdown } from '../atoms/Markdown.jsx'
 
 // Right-panel "Board chat" — talk to the lead agent.
 export function BoardChat({ messages, onSend, sending }) {
   const [text, setText] = useState('')
+  const [effort, setEffort] = useState('medium')
+  const [files, setFiles] = useState([])
   const scrollRef = useRef(null)
+  const fileRef = useRef(null)
   useEffect(() => { if (scrollRef.current) scrollRef.current.scrollTop = scrollRef.current.scrollHeight }, [messages])
 
   const submit = () => {
     const t = text.trim()
-    if (!t) return
+    if (!t && !files.length) return
+    const picked = files
     setText('')
-    onSend(t)
+    setFiles([])
+    if (fileRef.current) fileRef.current.value = ''
+    onSend(t, effort, picked)
   }
   const onKey = (e) => { if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); submit() } }
+  const addFiles = (list) => setFiles((prev) => [...prev, ...Array.from(list || []).filter(Boolean)].slice(0, 10))
+  const removeFile = (index) => setFiles((prev) => prev.filter((_, i) => i !== index))
 
   return (
     <div className="flex h-full min-h-0 flex-col">
@@ -50,13 +58,54 @@ export function BoardChat({ messages, onSend, sending }) {
       </div>
 
       <div className="border-t border-slate-200 p-3">
+        {files.length > 0 && (
+          <div className="mb-2 flex flex-wrap gap-2">
+            {files.map((file, index) => (
+              <span
+                key={file.name + '_' + index}
+                className="inline-flex min-w-0 max-w-[180px] items-center gap-1.5 rounded-full border border-slate-200 bg-slate-50 px-2.5 py-1 text-xs font-medium text-slate-600"
+              >
+                <FileText className="h-3.5 w-3.5 shrink-0 text-[color:var(--accent)]" />
+                <span className="truncate">{file.name}</span>
+                <button
+                  type="button"
+                  onClick={() => removeFile(index)}
+                  title="Remove file"
+                  className="grid h-4 w-4 shrink-0 place-items-center rounded-full text-slate-400 transition hover:bg-rose-50 hover:text-rose-600"
+                >
+                  <X className="h-3 w-3" />
+                </button>
+              </span>
+            ))}
+          </div>
+        )}
         <div className="flex items-end gap-2 rounded-2xl border border-slate-200 bg-white p-2 focus-within:ring-2 focus-within:ring-[color:var(--accent)]">
+          <input
+            ref={fileRef}
+            type="file"
+            multiple
+            className="hidden"
+            onChange={(e) => addFiles(e.target.files)}
+          />
+          <Button type="button" variant="ghost" size="sm" onClick={() => fileRef.current?.click()} title="Attach files">
+            <Paperclip className="h-4 w-4" />
+          </Button>
           <textarea
             rows={1} value={text} onChange={(e) => setText(e.target.value)} onKeyDown={onKey}
             placeholder="Message the board lead. Tag agents with @name."
             className="max-h-32 flex-1 resize-none bg-transparent px-2 py-1.5 text-sm text-strong placeholder:text-slate-400 focus:outline-none"
           />
-          <Button size="sm" onClick={submit} disabled={sending || !text.trim()}><Send className="h-4 w-4" /></Button>
+          <select
+            value={effort}
+            onChange={(e) => setEffort(e.target.value)}
+            title="Reasoning effort"
+            className="h-9 shrink-0 rounded-lg border border-slate-200 bg-white px-2 text-xs font-medium text-slate-600 outline-none transition hover:border-[color:var(--accent)] focus:border-[color:var(--accent)] focus:ring-2 focus:ring-[color:var(--accent-soft)]"
+          >
+            {['off', 'minimal', 'low', 'medium', 'high', 'xhigh'].map((x) => (
+              <option key={x} value={x}>{x}</option>
+            ))}
+          </select>
+          <Button size="sm" onClick={submit} disabled={sending || (!text.trim() && !files.length)}><Send className="h-4 w-4" /></Button>
         </div>
       </div>
     </div>

@@ -75,7 +75,7 @@ export default function BoardDetailPage() {
     content: m.text,
     streaming: m.streaming,
   }))
-  const sendChat = (text) => mission.sendText(text, ORCH_ID)
+  const sendChat = (text, effort, files) => mission.sendText(text, ORCH_ID, effort, files)
 
   // Live feed — real run timeline only (no demo seed).
   const feedItems = useMemo(() => {

@@ -1,191 +1,187 @@
-# OpenClaw Mission Control: per-user Hostinger VPS setup
+# Mission Control per-user Hostinger VPS setup
 
-This is the repeatable setup guide for SSH Claude when installing Mission Control
-for one user on that user's own Hostinger VPS.
+This is the repeatable setup guide to give SSH Claude when installing the
+Mission Control dashboard for a new user on that user's own Hostinger VPS.
 
-The new model is:
+The current production model is:
 
 ```text
-browser
-  -> https://<dashboard-domain>
+Browser
+  -> https://DASHBOARD_DOMAIN
   -> Hostinger VPS Traefik on 80/443
-  -> frontend static app
-  -> /api/* routed by Traefik to local broker on 127.0.0.1:8787
-  -> broker talks to local OpenClaw gateway over loopback
+  -> frontend container, static React/Vite build
+
+Browser
+  -> https://DASHBOARD_DOMAIN/api/*
+  -> Traefik broker router, strip /api
+  -> broker container on port 8787, still loopback/private
+  -> local OpenClaw service/gateway
 ```
 
-Do not use Cloudflare Tunnel for new users. Hostinger VPS has a public IP and
-Hostinger's OpenClaw install usually already runs Traefik as the public reverse
-proxy. Keep Traefik as the only process bound to ports `80` and `443`.
+Do not use Cloudflare Tunnel for new installs. Do not expose the broker on a
+public port. Do not put `BROKER_SECRET` in the frontend bundle.
 
-## What changed from the old setup
+## Final architecture requirements
 
-Old setup:
+Use this as the target state for every user VPS:
 
 ```text
-frontend on Vercel
-  -> Cloudflare Tunnel hostname
-  -> broker on localhost:8787
-  -> OpenClaw gateway
+https://DASHBOARD_DOMAIN/      -> frontend container
+https://DASHBOARD_DOMAIN/api/* -> existing broker service on port 8787, strip /api
 ```
 
-New setup:
+Authentication:
 
 ```text
-frontend on the same user VPS
-  -> same-origin /api
-  -> Traefik strips /api and forwards to broker on localhost:8787
-  -> OpenClaw gateway
+React styled login page
+  -> POST /api/login
+  -> broker validates DASHBOARD_USERNAME + DASHBOARD_PASSWORD_HASH
+  -> broker sets HttpOnly Secure SameSite=Lax session cookie
+  -> all later /api calls use credentials: include
 ```
 
-Frontend code now defaults to `VITE_BROKER_URL=/api`. For each user, build the UI
-on the VPS with:
+Important auth rules:
 
-```env
-VITE_BROKER_URL=/api
-VITE_BROKER_SECRET=
-VITE_ORCHESTRATOR_SESSION=main
-VITE_DEMO=0
-VITE_USE_DEMO_DATA=0
-VITE_LOGIN_ENABLED=1
-```
+- `VITE_BROKER_SECRET` must be empty in `.env.local`.
+- The frontend must never bake `BROKER_SECRET` into JavaScript.
+- The broker may keep legacy `Authorization: Bearer BROKER_SECRET` for curl and
+  backward compatibility.
+- Do not put Traefik BasicAuth on `/api`; BasicAuth uses the same
+  `Authorization` header as Bearer auth and can break API calls.
+- Temporary Traefik BasicAuth on the frontend is acceptable during migration
+  only, but remove it after broker session-cookie auth works.
 
-Preferred auth is broker session-cookie auth: React posts credentials to
-`/api/login`, the broker sets an HttpOnly cookie, and the frontend never receives
-`BROKER_SECRET`. Only set `VITE_BROKER_SECRET=<BROKER_SECRET>` for a legacy broker
-that has not implemented session-cookie auth yet.
+## Per-user inputs
 
-## Inputs for each user
-
-Collect these before starting:
+Replace these before giving the guide to SSH Claude:
 
 ```bash
-export DASHBOARD_DOMAIN="<user-dashboard-domain>"   # e.g. user1.example.com
-export VPS_IP="<hostinger-vps-public-ip>"
-export BROKER_PORT="8787"
-export BROKER_SECRET="$(openssl rand -hex 32)"
+OPENCLAW_PROJECT_DIR=/docker/openclaw-sbif
+FRONTEND_CLONE_DIR=/docker/mission-control
+FRONTEND_REPO_URL=https://github.com/Cognio-so/Mission_control.git
+FRONTEND_APP_SUBDIR=openclaw-ui
+DASHBOARD_DOMAIN=dashboard.example.com
 ```
 
-The user needs a DNS A record:
+For each VPS also create or confirm:
 
 ```text
-<DASHBOARD_DOMAIN> -> <VPS_IP>
+DASHBOARD_DOMAIN A record -> VPS public IP
 ```
 
-If the domain is managed in Hostinger, create the A record in Hostinger DNS. If
-the domain is elsewhere, create it at that DNS provider. Wait until:
+If the domain is on Cloudflare DNS, set it to DNS-only/grey-cloud unless Traefik
+is already configured for DNS-01 challenges. Hostinger's default Traefik setup
+normally uses HTTP-01 and needs direct access.
 
-```bash
-dig +short "$DASHBOARD_DOMAIN"
-```
+## Non-negotiable constraints
 
-returns the VPS IP.
-
-## 1. Inspect the existing Hostinger/OpenClaw stack
-
-Do not reinstall OpenClaw. Hostinger's one-click OpenClaw VPS should already have
-OpenClaw and Traefik running.
-
-```bash
-docker ps --format "table {{.Names}}\t{{.Image}}\t{{.Ports}}"
-ss -ltnp | grep -E ':80|:443|:8787|:18789'
-openclaw gateway status || true
-jq '.gateway' ~/.openclaw/openclaw.json
-```
-
-Find the gateway URL and token:
-
-```bash
-GATEWAY_PORT="$(openclaw gateway status 2>/dev/null | grep -Eo '127\.0\.0\.1:[0-9]+' | head -1 | cut -d: -f2)"
-test -n "$GATEWAY_PORT" || GATEWAY_PORT="18789"
-
-GATEWAY_URL="ws://127.0.0.1:${GATEWAY_PORT}"
-GATEWAY_TOKEN="$(jq -r '.gateway.auth.token // empty' ~/.openclaw/openclaw.json)"
-
-echo "$GATEWAY_URL"
-test -n "$GATEWAY_TOKEN" && echo "gateway token found"
-```
-
-Hostinger deployments sometimes use a non-default gateway port. Always discover
-it from the live VPS. Keep the OpenClaw gateway private on loopback. Do not expose
-the gateway port publicly.
-
-Also confirm model/provider auth before debugging the broker:
-
-```bash
-openclaw models
-openclaw logs --follow
-```
-
-If model auth is expired, run the appropriate OpenClaw login flow on the VPS.
-
-## 2. Disable old Cloudflare tunnel path, if present
-
-Only do this on a VPS being moved to the per-user Hostinger model.
-
-```bash
-systemctl status cloudflared --no-pager || true
-systemctl disable --now cloudflared || true
-```
-
-Also remove the old Cloudflare public hostname in the Cloudflare dashboard if it
-exists. The new public entry point is the user's own domain pointing directly at
-the VPS IP.
-
-Do not delete Cloudflare resources for any other live user.
-
-## 3. Install or copy the broker
-
-The broker is the Node service that the Mission Control UI talks to. It exposes
-REST + SSE and talks to OpenClaw locally.
-
-Preferred:
+Give these rules to SSH Claude:
 
 ```text
-copy the known-working broker source from the previous VPS
+- Do not work from / root.
+- Do not reinstall OpenClaw.
+- Do not delete volumes.
+- Do not destroy existing OpenClaw containers.
+- Do not expose broker publicly.
+- Do not add "0.0.0.0:8787:8787".
+- Keep broker loopback-only if it already has "127.0.0.1:8787:8787".
+- Keep OpenClaw gateway/private runtime unchanged.
+- Use a separate dashboard subdomain, not the OpenClaw domain.
+- Do not stop cloudflared until the new dashboard and /api route are verified.
+- Show the docker-compose diff before deploying.
 ```
 
-Then create the broker `.env`:
+## 1. Inspect the existing VPS
 
-```env
-HOST=127.0.0.1
-PORT=8787
-BROKER_SECRET=<long random value unique to this user/VPS>
-GATEWAY_URL=ws://127.0.0.1:<discovered gateway port>
-GATEWAY_TOKEN=<gateway token from ~/.openclaw/openclaw.json>
-```
-
-Run it under PM2 if it is not containerized:
+Run from the OpenClaw project directory, not `/`:
 
 ```bash
-npm install
-npm install -g pm2
-pm2 start broker.mjs --name openclaw-broker --update-env
-pm2 save
-pm2 startup
+cd "$OPENCLAW_PROJECT_DIR"
+pwd
+docker compose ps
+docker ps
+docker network ls
+cat docker-compose.yml
+cat .env
 ```
 
-The broker should listen on `127.0.0.1:8787`, not `0.0.0.0`.
+Expected on a Hostinger OpenClaw VPS:
 
-Verify locally:
-
-```bash
-H="Authorization: Bearer $BROKER_SECRET"
-curl -s http://127.0.0.1:8787/health | jq
-curl -s -H "$H" http://127.0.0.1:8787/agents | jq
+```text
+- openclaw service already exists
+- broker service may already exist
+- Traefik container already exists
+- Traefik discovers labeled Docker containers
+- broker listens on 127.0.0.1:8787 or Docker-internal port 8787
 ```
 
-If the broker runs in Docker instead, put it on the same Docker network Traefik
-uses and expose only the container port internally.
+Example known-good state from the first VPS:
 
-## 4. Build the frontend on the user's VPS
+```text
+OpenClaw project: /docker/openclaw-sbif
+frontend clone: /docker/mission-control
+frontend app: /docker/mission-control/openclaw-ui
+dashboard domain: dashboard.srv1760992.hstgr.cloud
+broker container: openclaw-sbif-broker-1
+broker port: 127.0.0.1:8787->8787/tcp
+Traefik: host-network mode with Docker provider and labels
+```
 
-On the VPS, clone/copy the `openclaw-ui` project.
+If Traefik is host-network with Docker provider and `exposedbydefault=false`,
+the frontend and broker only need labels. Usually no Docker network changes are
+required.
+
+## 2. Backup before editing
+
+From `OPENCLAW_PROJECT_DIR`:
 
 ```bash
-cd openclaw-ui
-npm ci
-cat > .env.local <<EOF
+cp docker-compose.yml docker-compose.yml.bak.$(date +%F-%H%M)
+cp .env .env.bak.$(date +%F-%H%M)
+```
+
+Do not continue without backups.
+
+## 3. Clone or update the frontend repo
+
+```bash
+if [ ! -d "$FRONTEND_CLONE_DIR/.git" ]; then
+  git clone "$FRONTEND_REPO_URL" "$FRONTEND_CLONE_DIR"
+else
+  cd "$FRONTEND_CLONE_DIR"
+  git pull
+fi
+```
+
+If the repo is private, stop and ask which access method to use:
+
+```text
+Best: GitHub deploy key with read-only access.
+Fast: temporarily make repo public, clone, then make it private again.
+Acceptable: short-lived read-only GitHub PAT, revoked after clone.
+Manual: user clones into FRONTEND_CLONE_DIR, then SSH Claude continues.
+```
+
+Do not store GitHub tokens in files.
+
+Find the app folder:
+
+```bash
+APP_DIR="$FRONTEND_CLONE_DIR/$FRONTEND_APP_SUBDIR"
+test -f "$APP_DIR/package.json" || {
+  echo "Could not find frontend app at $APP_DIR"
+  find "$FRONTEND_CLONE_DIR" -maxdepth 3 -name package.json -print
+  exit 1
+}
+```
+
+## 4. Frontend environment
+
+Create `.env.local` inside the frontend app folder:
+
+```bash
+cd "$APP_DIR"
+cat > .env.local <<'EOF'
 VITE_BROKER_URL=/api
 VITE_BROKER_SECRET=
 VITE_ORCHESTRATOR_SESSION=main
@@ -193,30 +189,24 @@ VITE_DEMO=0
 VITE_USE_DEMO_DATA=0
 VITE_LOGIN_ENABLED=1
 EOF
-npm run build
 ```
 
-The static output is:
+Notes:
 
-```text
-openclaw-ui/dist
-```
+- `.env.local` is server-local and must not be committed.
+- `VITE_BROKER_SECRET` stays empty for secure session-cookie auth.
+- `VITE_LOGIN_ENABLED=1` means the React login gate is active.
+- Login credentials are checked by the broker, not by frontend env vars.
 
-Serve this behind Traefik. Do not run `vite preview` as the production service.
+## 5. Frontend Docker files
 
-## 5. Route frontend and broker through Traefik
-
-Use this if Hostinger's OpenClaw stack already has Traefik. That is the expected
-case. Do not install NGINX on the host unless Traefik is not present.
-
-### Option A: frontend as a static NGINX container behind Traefik
-
-Create `nginx-spa.conf` next to the frontend `dist` directory:
+Create `nginx-spa.conf` inside the frontend app folder:
 
 ```nginx
 server {
   listen 80;
   server_name _;
+
   root /usr/share/nginx/html;
   index index.html;
 
@@ -226,181 +216,266 @@ server {
 }
 ```
 
-Create or extend a Docker Compose file on the same Docker network as Traefik:
+Create `Dockerfile` inside the frontend app folder:
 
-```yaml
-services:
-  mission-control:
-    image: nginx:alpine
-    restart: unless-stopped
-    volumes:
-      - ./openclaw-ui/dist:/usr/share/nginx/html:ro
-      - ./nginx-spa.conf:/etc/nginx/conf.d/default.conf:ro
-    labels:
-      - "traefik.enable=true"
-      - "traefik.http.routers.mission-control.rule=Host(`${DASHBOARD_DOMAIN}`)"
-      - "traefik.http.routers.mission-control.entrypoints=websecure"
-      - "traefik.http.routers.mission-control.tls=true"
-      - "traefik.http.routers.mission-control.tls.certresolver=letsencrypt"
-      - "traefik.http.services.mission-control.loadbalancer.server.port=80"
+```dockerfile
+FROM node:22-alpine AS build
+WORKDIR /app
+COPY package*.json ./
+RUN npm ci
+COPY . .
+RUN npm run build
+
+FROM nginx:alpine
+COPY nginx-spa.conf /etc/nginx/conf.d/default.conf
+COPY --from=build /app/dist /usr/share/nginx/html
+EXPOSE 80
 ```
 
-Use the actual Traefik entrypoint and cert resolver names from the Hostinger stack.
-Common names are `web`, `websecure`, `letsencrypt`, `myresolver`, or `le`.
+## 6. Broker environment
 
-### Option B: route `/api` to a broker container
+The broker must have these variables. Put them in `OPENCLAW_PROJECT_DIR/.env`
+or in the broker service environment, matching the existing compose style.
 
-If the broker is a Docker service on the same Traefik network, add labels to the
-broker service:
+```env
+BROKER_SECRET=<random 32-byte hex, unique per VPS>
+OPENCLAW_GATEWAY_TOKEN=<existing gateway token if required>
+ALLOWED_ORIGINS=https://DASHBOARD_DOMAIN
 
-```yaml
-labels:
-  - "traefik.enable=true"
-  - "traefik.http.routers.openclaw-broker.rule=Host(`${DASHBOARD_DOMAIN}`) && PathPrefix(`/api`)"
-  - "traefik.http.routers.openclaw-broker.entrypoints=websecure"
-  - "traefik.http.routers.openclaw-broker.tls=true"
-  - "traefik.http.routers.openclaw-broker.tls.certresolver=letsencrypt"
-  - "traefik.http.routers.openclaw-broker.middlewares=openclaw-broker-strip"
-  - "traefik.http.middlewares.openclaw-broker-strip.stripprefix.prefixes=/api"
-  - "traefik.http.services.openclaw-broker.loadbalancer.server.port=8787"
+DASHBOARD_USERNAME=<user login name>
+DASHBOARD_PASSWORD_HASH=<bcrypt htpasswd hash>
+DASHBOARD_SESSION_SECRET=<random 32-byte hex, unique per VPS>
+DASHBOARD_SESSION_TTL_SECONDS=86400
 ```
 
-The StripPrefix middleware is required because the frontend calls `/api/agents`,
-but the broker contract expects `/agents`.
-
-### Option C: route `/api` to a PM2 broker on the host
-
-If the broker is running on the host with PM2, Traefik in Docker cannot use
-`127.0.0.1:8787` because that is the Traefik container itself. Use a Traefik file
-provider service pointing to the Docker host gateway.
-
-First confirm Traefik has host gateway access. If not, add this to the Traefik
-service and recreate only Traefik carefully:
-
-```yaml
-extra_hosts:
-  - "host.docker.internal:host-gateway"
-```
-
-Then add a dynamic file provider config, for example
-`dynamic/mission-control.yml`:
-
-```yaml
-http:
-  routers:
-    openclaw-broker:
-      rule: "Host(`USER_DOMAIN_HERE`) && PathPrefix(`/api`)"
-      entryPoints:
-        - websecure
-      tls:
-        certResolver: letsencrypt
-      middlewares:
-        - openclaw-broker-strip
-      service: openclaw-broker
-
-  middlewares:
-    openclaw-broker-strip:
-      stripPrefix:
-        prefixes:
-          - /api
-
-  services:
-    openclaw-broker:
-      loadBalancer:
-        servers:
-          - url: "http://host.docker.internal:8787"
-```
-
-Replace `USER_DOMAIN_HERE` and the cert resolver name. Only use this option if the
-Hostinger Traefik stack already enables the file provider.
-
-## 6. Protect the dashboard
-
-At minimum:
-
-```text
-- unique BROKER_SECRET per VPS/user
-- unique dashboard login username/password per VPS/user
-- broker bound to 127.0.0.1 or Docker-internal network only
-- OpenClaw gateway bound to loopback only
-- firewall exposes only 22, 80, 443
-- dashboard domain not shared across users
-```
-
-Recommended: add Traefik BasicAuth, OIDC, or another access gate to the dashboard
-router. The browser needs to call `/api`, so the same access gate should cover the
-frontend and `/api`.
-
-## 7. Verify end to end
-
-Local broker:
+Generate values:
 
 ```bash
-H="Authorization: Bearer $BROKER_SECRET"
-curl -s http://127.0.0.1:8787/health | jq
-curl -s -H "$H" http://127.0.0.1:8787/agents | jq
+openssl rand -hex 32
+docker run --rm httpd:alpine htpasswd -nbB 'USERNAME_HERE' 'PASSWORD_HERE'
 ```
 
-Public same-origin route:
+If the bcrypt hash is placed in `docker-compose.yml` labels or env values, escape
+every literal `$` as `$$` for Docker Compose interpolation. If it is placed in a
+plain `.env` file, keep single `$`.
 
-```bash
-curl -I "https://${DASHBOARD_DOMAIN}/"
-curl -s "https://${DASHBOARD_DOMAIN}/api/health" | jq
-curl -s -H "$H" "https://${DASHBOARD_DOMAIN}/api/agents" | jq
-```
-
-Browser checks:
-
-```text
-1. Open https://<DASHBOARD_DOMAIN>
-2. Settings should show Broker URL: /api
-3. Top bar should become Live
-4. Agents page should load broker agents
-5. Send a chat message
-6. Sign out should return to the fixed-credential login screen
-7. Activity page should show raw broker/SSE events
-8. Refresh the browser and confirm chat history resumes
-```
-
-If the UI is offline:
-
-```text
-- Check browser DevTools Network for /api/health, /api/agents, /api/stream.
-- 404 usually means Traefik did not route /api or did not strip /api.
-- 401/403 means VITE_BROKER_SECRET does not match BROKER_SECRET.
-- 502 means broker is not reachable from Traefik.
-- Live health but failed chat means broker cannot reach OpenClaw gateway or model auth is expired.
-```
-
-## 8. Broker endpoint contract
-
-All protected endpoints must accept:
+The broker still accepts legacy Bearer auth:
 
 ```http
-Authorization: Bearer <BROKER_SECRET>
+Authorization: Bearer BROKER_SECRET
 ```
 
-The SSE endpoint is:
+But the frontend should use session cookie auth only.
+
+## 7. Docker Compose changes
+
+Edit `OPENCLAW_PROJECT_DIR/docker-compose.yml`.
+
+Add a frontend service:
+
+```yaml
+  frontend:
+    build: /docker/mission-control/openclaw-ui
+    init: true
+    labels:
+      - traefik.enable=true
+      - traefik.http.routers.${COMPOSE_PROJECT_NAME}-frontend.rule=Host(`DASHBOARD_DOMAIN`)
+      - traefik.http.routers.${COMPOSE_PROJECT_NAME}-frontend.entrypoints=websecure
+      - traefik.http.routers.${COMPOSE_PROJECT_NAME}-frontend.tls.certresolver=letsencrypt
+      - traefik.http.services.${COMPOSE_PROJECT_NAME}-frontend.loadbalancer.server.port=80
+    restart: unless-stopped
+```
+
+Replace `DASHBOARD_DOMAIN` with the real domain. Adjust the build path only if
+the actual app folder differs.
+
+Add Traefik labels to the existing broker service:
+
+```yaml
+    labels:
+      - traefik.enable=true
+      - traefik.http.routers.${COMPOSE_PROJECT_NAME}-broker.rule=Host(`DASHBOARD_DOMAIN`) && PathPrefix(`/api`)
+      - traefik.http.routers.${COMPOSE_PROJECT_NAME}-broker.entrypoints=websecure
+      - traefik.http.routers.${COMPOSE_PROJECT_NAME}-broker.tls.certresolver=letsencrypt
+      - traefik.http.routers.${COMPOSE_PROJECT_NAME}-broker.middlewares=${COMPOSE_PROJECT_NAME}-broker-strip
+      - traefik.http.middlewares.${COMPOSE_PROJECT_NAME}-broker-strip.stripprefix.prefixes=/api
+      - traefik.http.services.${COMPOSE_PROJECT_NAME}-broker.loadbalancer.server.port=8787
+```
+
+Keep broker ports private:
+
+```yaml
+    ports:
+      - "127.0.0.1:8787:8787"
+```
+
+Do not change to `0.0.0.0`.
+
+If broker and OpenClaw are in the same compose network, the existing internal
+gateway style can stay:
+
+```yaml
+    environment:
+      - PORT=8787
+      - STATE_DIR=/state
+      - BROKER_SECRET=${BROKER_SECRET}
+      - GATEWAY_URL=ws://openclaw:${PORT}
+      - GATEWAY_TOKEN=${OPENCLAW_GATEWAY_TOKEN}
+      - ALLOWED_ORIGINS=${ALLOWED_ORIGINS}
+      - DASHBOARD_USERNAME=${DASHBOARD_USERNAME}
+      - DASHBOARD_PASSWORD_HASH=${DASHBOARD_PASSWORD_HASH}
+      - DASHBOARD_SESSION_SECRET=${DASHBOARD_SESSION_SECRET}
+      - DASHBOARD_SESSION_TTL_SECONDS=${DASHBOARD_SESSION_TTL_SECONDS}
+```
+
+If the broker runs on host/PM2 instead of Docker, Traefik inside Docker cannot
+reach host `127.0.0.1`. Prefer Docker for this stack. If PM2 is unavoidable, add
+`host.docker.internal:host-gateway` to Traefik and use a Traefik file-provider
+service to `http://host.docker.internal:8787`.
+
+## 8. Broker feature contract
+
+The broker on every VPS must implement these routes.
+
+Public or semi-public auth routes:
 
 ```text
-GET /stream?token=<BROKER_SECRET>
+GET    /healthz
+POST   /login
+GET    /session
+POST   /logout
 ```
 
-Required routes:
+Protected routes must accept the broker session cookie. They may also accept
+legacy `Authorization: Bearer BROKER_SECRET`.
+
+Core:
 
 ```text
 GET    /health
 GET    /agents
+GET    /teams
 POST   /agents
 PATCH  /agents/:id
 DELETE /agents/:id
+POST   /agents/draft-instructions
 GET    /agents/:id/files
 GET    /agents/:id/files/:name
 PUT    /agents/:id/files/:name
-POST   /agents/draft-instructions
+```
+
+Chat:
+
+```text
 POST   /chat
-GET    /stream?token=
-GET    /chat/history?sessionKey=&limit=
+GET    /stream?sessionKey=<encoded-session-key>
+GET    /chat/history?sessionKey=<encoded-session-key>&limit=50
+```
+
+`POST /chat` body:
+
+```json
+{
+  "message": "user text",
+  "agentId": "main",
+  "sessionKey": "agent:main:main",
+  "effort": "low",
+  "attachments": []
+}
+```
+
+Allowed effort values:
+
+```text
+off, minimal, low, medium, high, xhigh
+```
+
+Frontend session-key format:
+
+```text
+Main:  agent:main:<threadId>
+Agent: agent:<agentId>:<threadId>
+```
+
+The same session key must be used for:
+
+```text
+POST /chat
+GET /stream?sessionKey=
+GET /chat/history?sessionKey=
+```
+
+Uploads:
+
+```text
+POST /uploads
+```
+
+Upload contract:
+
+```text
+- multipart FormData
+- field name: file
+- credentials: include
+- do not set Content-Type manually
+- optional X-Session-Key header
+- max 25 MB
+- max 10 files
+- allowed extensions: .txt .md .csv .json .pdf .doc .docx .xls .xlsx .png .jpg .jpeg .webp
+- broker writes under /data/uploads
+- broker returns files: [{ id, name, mime, size, path }]
+- frontend passes returned path back verbatim in /chat attachments
+- broker rejects paths outside /data/uploads
+```
+
+The broker should prepend a hardened untrusted-file block to the user message so
+the agent reads those absolute paths with its file tools. There is no separate
+native chat-upload RPC; upload transport is the broker, file reading is done by
+the agent inside the container.
+
+Credentials/secrets:
+
+```text
+GET    /secrets
+POST   /secrets
+DELETE /secrets/:key
+```
+
+Rules:
+
+```text
+- values are write-only
+- list returns key names only
+- store in server-side global.env or equivalent
+- load into every agent environment
+```
+
+Cron:
+
+```text
+GET    /cron
+POST   /cron
+POST   /cron/:id/run
+POST   /cron/:id/enable
+POST   /cron/:id/disable
+DELETE /cron/:id
+```
+
+Cron job body:
+
+```json
+{
+  "name": "Weekly rank report",
+  "agent": "main",
+  "cron": "0 9 * * MON",
+  "timezone": "Asia/Kolkata",
+  "message": "Run the weekly rank report and summarize actions."
+}
+```
+
+Other UI routes:
+
+```text
 GET    /skills/marketplace
 GET    /skills/packs
 POST   /skills/marketplace/:id/install
@@ -413,12 +488,10 @@ POST   /boards/:id/tasks
 PATCH  /boards/:id/tasks/:taskId
 DELETE /boards/:id/tasks/:taskId
 POST   /boards/:id/tasks/:taskId/run
-GET    /cron
-POST   /cron/:id/run
 GET    /gateways
 ```
 
-Response envelopes may be bare arrays or named arrays:
+Response arrays may be returned as:
 
 ```json
 []
@@ -442,142 +515,300 @@ or:
 { "data": [] }
 ```
 
-## 9. Per-user checklist for SSH Claude
+## 9. Required broker behavior
 
-Use this exact checklist for every new user VPS:
+Agents:
 
 ```text
-1. Confirm DNS A record points dashboard domain to this VPS IP.
-2. Inspect existing Docker/OpenClaw/Traefik. Do not reinstall OpenClaw.
-3. Discover gateway port and gateway token.
-4. Disable cloudflared only if this VPS was using the old tunnel.
-5. Copy/install broker source.
-6. Create broker .env with HOST=127.0.0.1, PORT=8787, unique BROKER_SECRET,
-   discovered GATEWAY_URL, and GATEWAY_TOKEN.
-7. Start broker with PM2 or Docker.
-8. Verify local broker /health and /agents.
-9. Build frontend with VITE_BROKER_URL=/api and matching VITE_BROKER_SECRET.
-10. Serve dist behind Traefik.
-11. Add Traefik route for frontend domain.
-12. Add Traefik route for Host(domain) && PathPrefix(/api), strip /api, forward to broker.
-13. Verify public /, /api/health, /api/agents.
-14. Open browser, confirm Settings shows /api and top bar shows Live.
-15. Send a chat, refresh, confirm history resumes.
+- POST /agents creates real persistent agents, not just frontend records.
+- GET /teams returns { teams:[{team, orchestrator, members[]}], ungrouped:[] }.
+- DELETE /agents/:id permanently deletes from backend runtime/memory/session files.
+- Main is addressable as agentId "main".
+- /agents/main/files should expose Main AGENT.md/memory files if available.
 ```
 
-## 10. Current code expectations
-
-The frontend source expects same-origin deployment by default:
+Chat:
 
 ```text
-openclaw-ui/src/store/mission.jsx -> default broker URL: /api
-openclaw-ui/src/lib/api.js        -> default broker URL: /api
+- Main chat with agentId "main" talks to the global main controller.
+- Specific agent chat with agentId "<id>" talks to that actual registered agent.
+- Broker must route by sessionKey format agent:<agentId>:<threadId>.
+- Broker should send SSE named events: ready, chat, agent, session.tool,
+  session.operation.
+- Chat event JSON should include state delta/final/error/aborted, deltaText on
+  delta, message.content on final, runId, brokerSessionKey.
 ```
 
-Only override `VITE_BROKER_URL` when the broker is intentionally hosted on a
-different origin.
-
-## References
-
-- Traefik: https://doc.traefik.io/traefik/
-- Traefik Docker provider: https://doc.traefik.io/traefik/reference/install-configuration/providers/docker/
-- Traefik ACME certificates: https://doc.traefik.io/traefik/reference/install-configuration/tls/certificate-resolvers/acme/
-- Hostinger VPS: https://www.hostinger.com/vps-hosting
-- Hostinger OpenClaw: https://www.hostinger.com/openclaw
-
-## Appendix A. Copy-paste SSH Claude prompt for frontend hosting
-
-Use this prompt when a Hostinger OpenClaw VPS already has:
+Delegation map:
 
 ```text
-/docker/<openclaw-project>/docker-compose.yml
-openclaw service
-broker service
-traefik already running
-broker route currently exposed by Cloudflare Tunnel or localhost
+- If broker/OpenClaw emits spawned child sessions with spawnedBy, frontend shows
+  them as live sub-agent calls.
+- If only operation events exist, include agent id/name/team in operation text so
+  frontend can infer the active registered agent.
 ```
 
-Replace the placeholders before sending it to SSH Claude:
+Cron:
 
 ```text
-OPENCLAW_PROJECT_DIR=/docker/openclaw-sbif
-FRONTEND_CLONE_DIR=/docker/mission-control
-FRONTEND_REPO_URL=https://github.com/Cognio-so/Mission_control.git
-DASHBOARD_DOMAIN=dashboard.srv1760992.hstgr.cloud
-FRONTEND_APP_SUBDIR=openclaw-ui
+- If cron needs OpenClaw admin/operator scope, request and approve it once.
+- Verify GET/POST/RUN/ENABLE/DISABLE/DELETE before telling user it is done.
 ```
 
-If this is a branded domain such as `mission.cognio.so`, create a DNS-only A record
-to the VPS public IP first. If using Cloudflare DNS, it must be grey-cloud/DNS-only
-for Traefik Let's Encrypt HTTP-01 issuance unless the Traefik stack is already set
-up for DNS challenges.
-
-### Repo access choices
-
-If the frontend repo is private, use one of these options:
+Uploads:
 
 ```text
-Best: create a read-only GitHub Deploy Key for this VPS and clone by SSH.
-Fast: temporarily make the repo public, let SSH Claude clone it, then make it private again.
-Acceptable: provide a short-lived read-only GitHub PAT and rotate/revoke it after clone.
-Manual: clone it yourself into FRONTEND_CLONE_DIR, then tell SSH Claude to continue.
+- Ensure /data/uploads exists and is readable by the OpenClaw container user.
+- Example permissions from working VPS: owned/readable by UID 1000, files 0644.
+- Block path traversal.
+- Validate all attachment paths in /chat.
 ```
 
-Do not commit `.env`, `.env.local`, `BROKER_SECRET`, model tokens, or GitHub tokens.
-Do not leave the repo public after the VPS has cloned it.
-If `VITE_LOGIN_ENABLED=1`, both `VITE_LOGIN_USERNAME` and
-`VITE_LOGIN_PASSWORD` must be set before building; otherwise the login screen
-will reject every attempt.
+## 10. Deploy sequence
 
-### Prompt
+Before deploy, show the rendered config and diff:
+
+```bash
+cd "$OPENCLAW_PROJECT_DIR"
+docker compose config
+git -C "$FRONTEND_CLONE_DIR" status || true
+diff -u docker-compose.yml.bak.* docker-compose.yml || true
+```
+
+Stop and ask the user for approval before:
+
+```bash
+docker compose up -d --build
+```
+
+After approval:
+
+```bash
+cd "$OPENCLAW_PROJECT_DIR"
+docker compose up -d --build
+```
+
+If OpenClaw is recreated only because `.env` changed, that is acceptable as long
+as volumes are unchanged and `/data` is preserved. Do not delete volumes.
+
+## 11. Verification commands
+
+Container status:
+
+```bash
+cd "$OPENCLAW_PROJECT_DIR"
+docker compose ps
+docker logs --tail=80 "${COMPOSE_PROJECT_NAME}-frontend-1" || true
+docker logs --tail=120 "${COMPOSE_PROJECT_NAME}-broker-1" || true
+```
+
+Public routing:
+
+```bash
+curl -I "https://DASHBOARD_DOMAIN/"
+curl -s "https://DASHBOARD_DOMAIN/api/healthz"
+```
+
+Session auth:
+
+```bash
+curl -s -o /dev/null -w '%{http_code}\n' "https://DASHBOARD_DOMAIN/api/session"
+```
+
+Expected without cookie:
 
 ```text
-Before making changes, inspect files, show me the planned docker-compose.yml diff,
-and wait for my approval.
+401
+```
 
+Login with cookie jar:
+
+```bash
+curl -s -c /tmp/mc-cookie.jar \
+  -H 'Content-Type: application/json' \
+  -d '{"username":"DASHBOARD_USERNAME","password":"PLAIN_PASSWORD_FOR_TEST_ONLY"}' \
+  "https://DASHBOARD_DOMAIN/api/login"
+
+curl -s -b /tmp/mc-cookie.jar "https://DASHBOARD_DOMAIN/api/session"
+curl -s -b /tmp/mc-cookie.jar "https://DASHBOARD_DOMAIN/api/agents"
+```
+
+Legacy Bearer still works:
+
+```bash
+source "$OPENCLAW_PROJECT_DIR/.env"
+curl -s -H "Authorization: Bearer $BROKER_SECRET" \
+  "https://DASHBOARD_DOMAIN/api/agents"
+```
+
+Upload verification:
+
+```bash
+printf 'hello from upload test\n' >/tmp/upload-test.txt
+curl -s -b /tmp/mc-cookie.jar \
+  -H "X-Session-Key: agent:main:main" \
+  -F "file=@/tmp/upload-test.txt" \
+  "https://DASHBOARD_DOMAIN/api/uploads"
+```
+
+Chat verification:
+
+```bash
+curl -s -b /tmp/mc-cookie.jar \
+  -H 'Content-Type: application/json' \
+  -d '{"message":"Say ok","agentId":"main","sessionKey":"agent:main:main","effort":"low"}' \
+  "https://DASHBOARD_DOMAIN/api/chat"
+```
+
+Bundle safety check:
+
+```bash
+curl -s "https://DASHBOARD_DOMAIN/" | head
+docker exec "${COMPOSE_PROJECT_NAME}-frontend-1" sh -lc \
+  "grep -R \"BROKER_SECRET\\|$(source "$OPENCLAW_PROJECT_DIR/.env"; echo "$BROKER_SECRET")\" -n /usr/share/nginx/html || true"
+```
+
+Expected:
+
+```text
+No broker secret in frontend bundle.
+```
+
+Browser checks:
+
+```text
+1. Open https://DASHBOARD_DOMAIN.
+2. No native browser BasicAuth popup appears.
+3. Styled React login page appears.
+4. Login works.
+5. Settings shows Broker URL: /api and Broker secret: not set.
+6. Top bar shows Live.
+7. Agents and team tree load.
+8. Main chat works.
+9. Specific agent chat works.
+10. New agent creates a real backend agent.
+11. Delete agent removes it from backend.
+12. Agent markdown editor opens AGENT.md/memory files.
+13. Main markdown editor opens from the Main card pencil.
+14. File upload in chat works.
+15. Scheduled jobs page lists/creates/runs/deletes cron jobs.
+16. Refresh browser; chat history resumes.
+17. Sign out returns to login.
+```
+
+## 12. Disable old Cloudflare Tunnel
+
+Only after all browser checks pass:
+
+```bash
+systemctl status cloudflared --no-pager || true
+systemctl disable --now cloudflared || true
+```
+
+Then verify:
+
+```bash
+curl -I "https://DASHBOARD_DOMAIN/"
+curl -s "https://DASHBOARD_DOMAIN/api/healthz"
+```
+
+Do not remove Cloudflare resources belonging to other users.
+
+## 13. Common failures
+
+```text
+Frontend 404 on refresh:
+  nginx-spa.conf missing try_files fallback.
+
+/api returns 404:
+  broker Traefik router missing or PathPrefix(`/api`) not matching.
+
+/api returns broker 404:
+  StripPrefix(`/api`) missing.
+
+/api returns 502:
+  Traefik cannot reach broker container/port.
+
+Login works but agents 401:
+  cookie not Secure/SameSite/Path correctly, or broker auth gate not accepting cookie.
+
+Native browser login popup:
+  Traefik BasicAuth still attached to frontend router. Remove it after cookie auth works.
+
+Frontend bundle contains BROKER_SECRET:
+  .env.local has VITE_BROKER_SECRET set. Set it empty and rebuild frontend.
+
+Upload succeeds but agent cannot read file:
+  /data/uploads not mounted/readable in OpenClaw container or file permissions wrong.
+
+Chat only updates after refresh:
+  SSE /api/stream route broken, sessionKey mismatch, or broker not forwarding final/delta events.
+
+Coordination map shows only Main:
+  broker operation/sub-agent events do not include registered agent id/name/team, or spawnedBy is missing.
+```
+
+## 14. Rollback
+
+If routing fails:
+
+```bash
+cd "$OPENCLAW_PROJECT_DIR"
+cp docker-compose.yml.bak.YYYY-MM-DD-HHMM docker-compose.yml
+cp .env.bak.YYYY-MM-DD-HHMM .env
+docker compose up -d
+```
+
+If old Cloudflare Tunnel was stopped and must be restored:
+
+```bash
+systemctl enable --now cloudflared
+```
+
+## 15. Copy-paste prompt for SSH Claude
+
+Use this prompt for each new VPS. Replace placeholders first.
+
+```text
 We are inside OPENCLAW_PROJECT_DIR on a Hostinger VPS.
 
 Goal:
-Deploy the Mission Control React/Vite frontend from:
-FRONTEND_REPO_URL
-
-Also migrate browser access away from Cloudflare Tunnel to same-VPS Traefik routing.
-
-Important rules:
-- Do not work from / root.
-- Do not reinstall OpenClaw.
-- Do not destroy existing OpenClaw containers.
-- Do not expose broker publicly.
-- Do not add "0.0.0.0:8787:8787".
-- Do not stop Cloudflare Tunnel until the new dashboard domain and /api route are verified.
-- Keep OpenClaw gateway/private runtime unchanged.
-- Use a separate dashboard subdomain, not the existing OpenClaw domain.
-- Keep broker port binding loopback-only if it already exists: "127.0.0.1:8787:8787".
+Deploy the Mission Control React/Vite frontend and configure the existing broker
+so the dashboard works from this VPS without Cloudflare Tunnel.
 
 Inputs:
 OPENCLAW_PROJECT_DIR=/docker/openclaw-sbif
 FRONTEND_CLONE_DIR=/docker/mission-control
 FRONTEND_REPO_URL=https://github.com/Cognio-so/Mission_control.git
-DASHBOARD_DOMAIN=dashboard.srv1760992.hstgr.cloud
 FRONTEND_APP_SUBDIR=openclaw-ui
+DASHBOARD_DOMAIN=REPLACE_WITH_DASHBOARD_DOMAIN
 
-Required final routing:
+Final routing:
 https://DASHBOARD_DOMAIN/      -> frontend container
-https://DASHBOARD_DOMAIN/api/* -> existing broker service on port 8787, strip /api
+https://DASHBOARD_DOMAIN/api/* -> broker service on port 8787, strip /api
 
-Required final auth:
-- React renders the styled login page.
-- POST /api/login validates username/password on the broker and sets an HttpOnly
-  Secure SameSite=Lax session cookie.
-- GET /api/session reports whether the browser has a valid session.
-- POST /api/logout clears the cookie.
-- Protected /api routes accept the session cookie.
-- The frontend bundle must not contain BROKER_SECRET.
-- Temporary Traefik BasicAuth may stay during migration, but remove it after
-  broker session-cookie auth and the React login are verified.
+Final auth:
+- Styled React login page only.
+- No native browser BasicAuth popup.
+- POST /api/login validates username/password on broker.
+- Broker sets HttpOnly Secure SameSite=Lax session cookie.
+- Frontend .env.local has VITE_BROKER_SECRET empty.
+- Frontend bundle must not contain BROKER_SECRET.
+- Protected /api routes accept session cookie.
+- Legacy Bearer auth may remain for curl.
 
-Step 1: Inspect current setup
-Run:
+Hard rules:
+- Do not work from / root.
+- Do not reinstall OpenClaw.
+- Do not delete volumes.
+- Do not expose broker publicly.
+- Do not add "0.0.0.0:8787:8787".
+- Keep broker loopback-only if currently "127.0.0.1:8787:8787".
+- Do not stop cloudflared until the new dashboard and /api route are verified.
+- Show the docker-compose and .env diff before deploying.
+
+Step 1: inspect
+cd OPENCLAW_PROJECT_DIR
 pwd
 docker compose ps
 docker ps
@@ -585,59 +816,37 @@ docker network ls
 cat docker-compose.yml
 cat .env
 
-Confirm:
-- .env has BROKER_SECRET.
-- broker service exists and listens on port 8787.
-- Traefik is already running.
-- Existing OpenClaw service is not changed except if env_file changes require recreate.
-
-Step 2: Backup existing files
-Run from OPENCLAW_PROJECT_DIR:
+Step 2: backup
 cp docker-compose.yml docker-compose.yml.bak.$(date +%F-%H%M)
 cp .env .env.bak.$(date +%F-%H%M)
 
-Step 3: Clone or update frontend repo
-Use FRONTEND_CLONE_DIR.
+Step 3: clone or update frontend
+if [ ! -d "FRONTEND_CLONE_DIR/.git" ]; then
+  git clone FRONTEND_REPO_URL FRONTEND_CLONE_DIR
+else
+  cd FRONTEND_CLONE_DIR && git pull
+fi
 
-If folder does not exist:
-git clone FRONTEND_REPO_URL FRONTEND_CLONE_DIR
+If clone fails because the repo is private, stop and ask me for repo access:
+Deploy Key, temporary public repo, PAT, or manual clone.
 
-If folder exists:
-cd FRONTEND_CLONE_DIR
-git pull
+Step 4: locate frontend app
+APP_DIR=FRONTEND_CLONE_DIR/FRONTEND_APP_SUBDIR
+test -f "$APP_DIR/package.json" || { find FRONTEND_CLONE_DIR -maxdepth 3 -name package.json -print; exit 1; }
 
-If clone fails because the repo is private, stop and ask me which repo access method
-to use: Deploy Key, temporary public repo, PAT, or manual clone. Do not keep retrying.
-
-Step 4: Locate frontend app folder
-If this exists:
-FRONTEND_CLONE_DIR/FRONTEND_APP_SUBDIR/package.json
-
-Then frontend app folder is:
-FRONTEND_CLONE_DIR/FRONTEND_APP_SUBDIR
-
-Otherwise find package.json and ask me before choosing a different app folder.
-
-Step 5: Create frontend .env.local
-Read BROKER_SECRET from:
-OPENCLAW_PROJECT_DIR/.env
-
-Create this file inside the frontend app folder:
-
+Step 5: write frontend .env.local
+cd "$APP_DIR"
+cat > .env.local <<'EOF'
 VITE_BROKER_URL=/api
 VITE_BROKER_SECRET=
 VITE_ORCHESTRATOR_SESSION=main
 VITE_DEMO=0
 VITE_USE_DEMO_DATA=0
 VITE_LOGIN_ENABLED=1
+EOF
 
-Do not commit .env.local.
-Do not bake BROKER_SECRET into the frontend when broker session-cookie auth is enabled.
-Only use VITE_BROKER_SECRET for a temporary legacy Bearer-token migration.
-
-Step 6: Add frontend nginx config
-Create nginx-spa.conf inside frontend app folder:
-
+Step 6: create frontend nginx-spa.conf
+cat > nginx-spa.conf <<'EOF'
 server {
   listen 80;
   server_name _;
@@ -649,10 +858,10 @@ server {
     try_files $uri $uri/ /index.html;
   }
 }
+EOF
 
-Step 7: Add frontend Dockerfile
-Create Dockerfile inside frontend app folder:
-
+Step 7: create frontend Dockerfile
+cat > Dockerfile <<'EOF'
 FROM node:22-alpine AS build
 WORKDIR /app
 COPY package*.json ./
@@ -664,9 +873,25 @@ FROM nginx:alpine
 COPY nginx-spa.conf /etc/nginx/conf.d/default.conf
 COPY --from=build /app/dist /usr/share/nginx/html
 EXPOSE 80
+EOF
 
-Step 8: Edit OPENCLAW_PROJECT_DIR/docker-compose.yml
-Add a new service at the same level as openclaw and broker:
+Step 8: update broker env
+Ensure .env has:
+BROKER_SECRET=<unique random hex>
+ALLOWED_ORIGINS=https://DASHBOARD_DOMAIN
+DASHBOARD_USERNAME=<login username>
+DASHBOARD_PASSWORD_HASH=<bcrypt htpasswd hash>
+DASHBOARD_SESSION_SECRET=<unique random hex>
+DASHBOARD_SESSION_TTL_SECONDS=86400
+
+Generate hash with:
+docker run --rm httpd:alpine htpasswd -nbB USERNAME PASSWORD
+
+If the hash goes in docker-compose.yml, double every $ as $$.
+If the hash goes in .env, keep single $.
+
+Step 9: update docker-compose.yml
+Add frontend service with Traefik labels:
 
 frontend:
   build: FRONTEND_CLONE_DIR/FRONTEND_APP_SUBDIR
@@ -679,11 +904,7 @@ frontend:
     - traefik.http.services.${COMPOSE_PROJECT_NAME}-frontend.loadbalancer.server.port=80
   restart: unless-stopped
 
-If frontend app folder is not FRONTEND_CLONE_DIR/FRONTEND_APP_SUBDIR, adjust the
-build path only after showing me the discovered path.
-
-Step 9: Add Traefik labels to existing broker service
-Inside the existing broker service, add labels:
+Add broker Traefik labels:
 
 labels:
   - traefik.enable=true
@@ -694,100 +915,80 @@ labels:
   - traefik.http.middlewares.${COMPOSE_PROJECT_NAME}-broker-strip.stripprefix.prefixes=/api
   - traefik.http.services.${COMPOSE_PROJECT_NAME}-broker.loadbalancer.server.port=8787
 
-Keep existing broker ports exactly as they are if already loopback-only:
+Keep broker ports loopback-only:
 ports:
   - "127.0.0.1:8787:8787"
 
-Do not expose broker publicly.
+Pass these env vars to broker:
+- BROKER_SECRET
+- ALLOWED_ORIGINS
+- DASHBOARD_USERNAME
+- DASHBOARD_PASSWORD_HASH
+- DASHBOARD_SESSION_SECRET
+- DASHBOARD_SESSION_TTL_SECONDS
 
-Step 10: If broker uses ALLOWED_ORIGINS, add the new dashboard origin
-If .env contains ALLOWED_ORIGINS, include:
-https://DASHBOARD_DOMAIN
+Step 10: ensure broker features
+Verify or implement these endpoints:
+/healthz, /login, /session, /logout, /health, /agents, /teams,
+/agents CRUD, /agents/:id/files, /agents/draft-instructions,
+/chat, /stream, /chat/history, /uploads, /secrets, /cron CRUD,
+/skills, /boards, /gateways.
 
-Do not remove existing allowed origins unless I explicitly approve it.
+Uploads must write under /data/uploads and /chat must validate attachment paths.
+Cron must support list/create/run/enable/disable/delete.
+Agent delete must delete from backend, not only UI.
+Main must be agentId "main".
 
-Step 11: Show me the diff before deploy
-Run:
+Step 11: show diff and wait
+cd OPENCLAW_PROJECT_DIR
 docker compose config
 diff -u docker-compose.yml.bak.* docker-compose.yml || true
+Ask me for approval before docker compose up.
 
-Then stop and ask for my approval before running docker compose up.
-
-Step 12: After approval, deploy
-Run:
-cd OPENCLAW_PROJECT_DIR
+Step 12: deploy after approval
 docker compose up -d --build
 
-If openclaw is recreated only because .env changed, that is acceptable if volumes
-are unchanged and /data is preserved. Do not delete volumes.
-
-Step 13: Verify containers
-Run:
-docker compose ps
-docker logs --tail=80 ${COMPOSE_PROJECT_NAME}-frontend-1 || true
-docker logs --tail=80 ${COMPOSE_PROJECT_NAME}-broker-1 || true
-
-Step 14: Verify public frontend and broker route
-Run:
+Step 13: verify
 curl -I https://DASHBOARD_DOMAIN/
-curl -s https://DASHBOARD_DOMAIN/api/healthz || true
-curl -s https://DASHBOARD_DOMAIN/api/health || true
+curl -s https://DASHBOARD_DOMAIN/api/healthz
 
-Then:
+curl -s -o /dev/null -w '%{http_code}\n' https://DASHBOARD_DOMAIN/api/session
+
+curl -s -c /tmp/mc-cookie.jar \
+  -H 'Content-Type: application/json' \
+  -d '{"username":"USERNAME","password":"PASSWORD"}' \
+  https://DASHBOARD_DOMAIN/api/login
+
+curl -s -b /tmp/mc-cookie.jar https://DASHBOARD_DOMAIN/api/session
+curl -s -b /tmp/mc-cookie.jar https://DASHBOARD_DOMAIN/api/agents
+
 source OPENCLAW_PROJECT_DIR/.env
 curl -s -H "Authorization: Bearer $BROKER_SECRET" https://DASHBOARD_DOMAIN/api/agents
 
-Expected:
-- / returns frontend HTML with HTTP 200.
-- /api/healthz or /api/health returns broker health.
-- authenticated /api/agents returns broker agents JSON.
+Check frontend bundle does not contain BROKER_SECRET.
 
-Step 15: Browser verification
-Ask me to open:
-https://DASHBOARD_DOMAIN
+Step 14: browser verification
+Ask me to open https://DASHBOARD_DOMAIN and confirm:
+- styled login only, no browser popup
+- login works
+- Settings Broker URL is /api and Broker secret is not set
+- Live status
+- agents/team tree load
+- main chat works
+- agent chat works
+- create/delete agent works
+- agent and main markdown editor opens
+- upload file in chat works
+- scheduled jobs page works
+- refresh resumes chat history
+- sign out returns to login
 
-I must confirm:
-- Login screen accepts the configured fixed username/password.
-- Settings shows Broker URL: /api.
-- Top bar shows Live.
-- Agents load.
-- Sending a chat reaches broker/OpenClaw and returns a response.
-- Sign out returns to the login screen.
-
-Step 16: Disable Cloudflare Tunnel only after browser verification passes
-Only after I confirm browser checks passed, run:
+Step 15: disable cloudflared only after browser verification
 systemctl status cloudflared --no-pager || true
 systemctl disable --now cloudflared || true
 
-After disabling, verify same-VPS route still works:
+Recheck:
 curl -I https://DASHBOARD_DOMAIN/
-curl -s https://DASHBOARD_DOMAIN/api/health || true
-
-Do not remove Cloudflare DNS/tunnel resources for other users.
-Do not stop cloudflared before the new same-VPS Traefik routing works.
+curl -s https://DASHBOARD_DOMAIN/api/healthz
 ```
 
-### Proven result from the first Hostinger VPS
-
-This exact flow worked on the VPS where:
-
-```text
-OpenClaw project: /docker/openclaw-sbif
-frontend clone: /docker/mission-control
-frontend app: /docker/mission-control/openclaw-ui
-dashboard domain: dashboard.srv1760992.hstgr.cloud
-broker container: openclaw-sbif-broker-1
-broker port: 127.0.0.1:8787->8787/tcp
-Traefik: host-network mode with Docker provider and labels
-```
-
-Verified:
-
-```text
-GET /                      -> HTTP 200 frontend HTML
-GET /api/healthz           -> {"ok":true}
-GET /api/health with auth  -> gateway connected true, operator scopes
-GET /api/agents with auth  -> Orchestrator + managed agents JSON
-Browser Settings           -> Broker URL /api, Live
-Browser chat               -> response returned through broker/OpenClaw
-```

@@ -355,19 +355,32 @@ export function MissionProvider({ children }) {
   }, [anyRunning, state.threads])
 
   const sendText = useCallback(
-    (text, toId) => {
+    async (text, toId, effort, files = []) => {
       const id = toId || activeId
+      const selectedFiles = Array.from(files || []).filter(Boolean)
       text = (text || '').trim()
-      if (!text || getT(state, id).running) return
+      if ((!text && !selectedFiles.length) || getT(state, id).running) return
       const agent = agentsById[id]
       const sessionKey = currentSessionKey(id)
-      dispatch({ type: 'user', agent: id, text })
+      const message = text || 'Please analyze the attached file.'
+      const displayText = selectedFiles.length
+        ? message + '\n\nAttached: ' + selectedFiles.map((f) => f.name).join(', ')
+        : message
+      dispatch({ type: 'user', agent: id, text: displayText })
       if (settings.demo) {
-        runDemo(text, dispatch, { agent, agents })
+        runDemo(message, dispatch, { agent, agents })
       } else if (!settings.base) {
         dispatch({ type: 'assistant.note', agent: id, text: 'No broker is configured. Set VITE_BROKER_URL and restart the UI.' })
       } else if (clientRef.current) {
-        clientRef.current.sendMessage(text, { agentId: id, sessionKey, agents, label: (agent?.name || id) + ' / ' + sessionKey })
+        try {
+          const attachments = selectedFiles.length
+            ? await clientRef.current.uploadFiles(selectedFiles, { agentId: id, sessionKey })
+            : []
+          await clientRef.current.sendMessage(message, { agentId: id, sessionKey, agents, effort, attachments, label: (agent?.name || id) + ' / ' + sessionKey })
+        } catch (err) {
+          dispatch({ type: 'node', node: { cls: 'error', head: 'Upload failed', sub: err.message || String(err) } })
+          dispatch({ type: 'assistant.final', agent: id, text: 'Upload failed: ' + (err.message || String(err)) })
+        }
       }
     },
     [state, activeId, settings, agents, agentsById, currentSessionKey],

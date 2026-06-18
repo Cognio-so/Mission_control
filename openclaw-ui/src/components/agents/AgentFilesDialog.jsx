@@ -18,7 +18,7 @@ export function AgentFilesDialog({ agentId, agentName, onClose }) {
   const [saving, setSaving] = useState(false)
   const [error, setError] = useState('')
 
-  // load the file list, then auto-open memory.md (or the first file)
+  // load the file list, then auto-open the persona markdown.
   useEffect(() => {
     let alive = true
     setLoading(true); setError('')
@@ -26,7 +26,12 @@ export function AgentFilesDialog({ agentId, agentName, onClose }) {
       .then((list) => {
         if (!alive) return
         setFiles(list)
-        const first = list.find((f) => f.name === 'memory.md') || list[0]
+        const first =
+          list.find((f) => f.name === 'AGENT.md') ||
+          list.find((f) => f.name?.toLowerCase() === 'agent.md') ||
+          list.find((f) => f.name?.toLowerCase().endsWith('.md') && f.name !== 'memory.md') ||
+          list.find((f) => f.name === 'memory.md') ||
+          list[0]
         if (first) openFile(first.name)
         else setLoading(false)
       })
@@ -63,15 +68,15 @@ export function AgentFilesDialog({ agentId, agentName, onClose }) {
 
   return (
     <Dialog open onOpenChange={(o) => !o && onClose()}>
-      <DialogContent className="max-w-3xl">
+      <DialogContent className="max-w-5xl">
         <DialogHeader>
           <DialogTitle>{agentName} · memory &amp; files</DialogTitle>
-          <DialogDescription>The agent’s broker‑local files. Editing <span className="font-mono">memory.md</span> changes what it remembers; <span className="font-mono">AGENT.md</span> is its persona.</DialogDescription>
+          <DialogDescription>The agent’s markdown files. <span className="font-mono">AGENT.md</span> is its persona; <span className="font-mono">memory.md</span> is what it remembers.</DialogDescription>
         </DialogHeader>
 
         {error && <div className="mt-3 rounded-lg bg-rose-50 px-3 py-2 text-xs text-rose-600">{error}</div>}
 
-        <div className="mt-4 grid grid-cols-[180px_1fr] gap-4">
+        <div className="mt-4 grid grid-cols-[220px_1fr] gap-4">
           <div className="space-y-1">
             {files.length === 0 && !loading && <div className="rounded-lg bg-slate-50 px-3 py-2 text-xs text-slate-400">No files.</div>}
             {files.map((f) => {
@@ -99,7 +104,7 @@ export function AgentFilesDialog({ agentId, agentName, onClose }) {
               disabled={loading || !active}
               spellCheck={false}
               placeholder={loading ? 'Loading…' : 'Select a file'}
-              className="h-72 w-full resize-none rounded-xl border border-slate-200 bg-slate-50 p-3 font-mono text-xs leading-relaxed text-strong focus:outline-none focus:ring-2 focus:ring-[color:var(--accent)] scrollbar-thin"
+              className="h-[60vh] w-full resize-none rounded-xl border border-slate-200 bg-slate-50 p-4 font-mono text-xs leading-relaxed text-strong focus:outline-none focus:ring-2 focus:ring-[color:var(--accent)] scrollbar-thin"
             />
             <div className="mt-1 text-[11px] text-slate-400">{active ? `${content.length} chars${dirty ? ' · unsaved' : ''}` : ''}</div>
           </div>
