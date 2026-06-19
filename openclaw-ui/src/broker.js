@@ -512,7 +512,7 @@ export class BrokerClient {
     const agent = opts.agentId || this.pendingAgent
     this.pendingAgent = agent
     if (this.streamSessionKey !== sessionKey || !this.es) await this.connect(sessionKey)
-    this.d({ type: 'run.start', agent, title: (opts.label || sessionKey), query: text })
+    this.d({ type: 'run.start', agent, title: (opts.label || sessionKey), query: text, sessionKey })
     this.d({ type: 'assistant.start', agent })
 
     try {

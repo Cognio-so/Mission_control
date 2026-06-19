@@ -87,6 +87,11 @@ export const Api = {
     list() {
       return load(async () => unwrap(await brokerGet('/cron'), 'jobs'), DEMO_CRON)
     },
+    // Past cron runs (independent of whether the job still exists) — so a self-deleted
+    // one-shot or a disabled job still shows its output. Empty/graceful if unsupported.
+    history(limit = 50) {
+      return load(async () => unwrap(await brokerGet('/cron/runs?limit=' + limit), 'runs'), [])
+    },
     create(job) {
       return brokerSend('/cron', 'POST', job)
     },

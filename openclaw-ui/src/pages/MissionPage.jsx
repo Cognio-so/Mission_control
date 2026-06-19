@@ -20,7 +20,7 @@ export default function MissionPage() {
     settings, agents, agentsById, orchestrator, roster, managed, teams,
     activeId, setActiveId, state, anyRunning, agentsLoading, agentsError, agentStatus,
     sendText, stopRun, clearThread, saveAgent, deleteAgent, agentSaving, getThread, newChat,
-    savedChats, resumeChat, deleteConversation,
+    savedChats, resumeChat, deleteConversation, currentSessionKey,
   } = m
 
   const [searchParams] = useSearchParams()
@@ -29,6 +29,7 @@ export default function MissionPage() {
 
   const selectedId = chatOnly ? ORCH_ID : agentsById[activeId] ? activeId : ORCH_ID
   const active = agentsById[selectedId] || orchestrator
+  const activeSessionKey = currentSessionKey(selectedId) // current chat session — scopes the run artifact
   const thread = getThread(selectedId)
   const mainThread = getThread(ORCH_ID)
 
@@ -167,8 +168,8 @@ export default function MissionPage() {
   const restoredOnceRef = useRef(false)
   useEffect(() => {
     if (restoredOnceRef.current) return
-    if (groupRuns(state.timeline, selectedId).length > 0) { setArtifactOpen(true); restoredOnceRef.current = true }
-  }, [state.timeline, selectedId])
+    if (groupRuns(state.timeline, activeSessionKey).length > 0) { setArtifactOpen(true); restoredOnceRef.current = true }
+  }, [state.timeline, activeSessionKey])
 
   const send = () => {
     const t = composer.trim()
@@ -526,6 +527,7 @@ export default function MissionPage() {
         agents={agents}
         teams={teams}
         active={active}
+        sessionKey={activeSessionKey}
         timeline={state.timeline}
         conn={state.conn}
         onSelectNode={setNodeDetail}
@@ -1192,8 +1194,9 @@ function stepsFromItems(allAgents, items, excludeId) {
 }
 
 // Split the global timeline into per-query runs (one per run.start divider). Each run
-// keeps its items (subs/nodes), a derived status, and the query text that triggered it.
-function groupRuns(timeline, agentId) {
+// keeps its items, status, query, agent, and the session it ran in. When a sessionKey is
+// given, only that chat session's runs are returned (so a "New chat" starts a clean slate).
+function groupRuns(timeline, sessionKey) {
   const isEnd = (t) => /^run (complete|failed|stopped)$/i.test(String(t || '').trim())
   const starts = []
   timeline.forEach((it, i) => { if (it.kind === 'divider' && !isEnd(it.text)) starts.push(i) })
@@ -1209,7 +1212,7 @@ function groupRuns(timeline, agentId) {
       else if (/stopped/i.test(t)) closeKind = 'stopped'
       else if (/complete/i.test(t)) closeKind = 'done'
     }
-    return { id: head.runId || head.id, query: (head.query || head.text || '').trim(), agent: head.agent, startTs: head.ts || 0, items: slice.filter((it) => it.kind !== 'divider'), closeKind }
+    return { id: head.runId || head.id, query: (head.query || head.text || '').trim(), agent: head.agent, sessionKey: head.sessionKey, startTs: head.ts || 0, items: slice.filter((it) => it.kind !== 'divider'), closeKind }
   })
   runs.forEach((r) => {
     // A run is "running" while a delegated sub is ACTIVELY running (not merely queued), OR
@@ -1219,7 +1222,7 @@ function groupRuns(timeline, agentId) {
   })
   // Order by start time so server-merged history interleaves correctly with live runs.
   runs.sort((x, y) => (x.startTs || 0) - (y.startTs || 0))
-  return agentId ? runs.filter((r) => !r.agent || r.agent === agentId) : runs
+  return sessionKey ? runs.filter((r) => r.sessionKey === sessionKey) : runs
 }
 
 // Turn detected agent calls into clickable activity steps (excludes the source agent).
@@ -1268,9 +1271,9 @@ function StatusPip({ status, pulse, className }) {
 // On-demand "artifact" drawer: a per-query accordion. Each query is a collapsible row;
 // expanding it reveals that query's coordination map + agent activity (output as markdown),
 // and collapsing hides all of it under the query. Runs persist so any query is revisitable.
-function RunArtifact({ open, onClose, orchestrator, agents, teams, active, timeline, conn, onSelectNode }) {
+function RunArtifact({ open, onClose, orchestrator, agents, teams, active, sessionKey, timeline, conn, onSelectNode }) {
   const allAgents = useMemo(() => buildAllAgents(orchestrator, agents, teams), [orchestrator, agents, teams])
-  const runs = useMemo(() => groupRuns(timeline, active?.id), [timeline, active?.id])
+  const runs = useMemo(() => groupRuns(timeline, sessionKey), [timeline, sessionKey])
   const activeRunId = (runs.find((r) => r.status === 'running') || runs[runs.length - 1])?.id || null
   const anyLive = runs.some((r) => r.status === 'running')
   const source = active || orchestrator

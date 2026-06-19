@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useState } from 'react'
 import { useNavigate } from 'react-router-dom'
-import { ArrowRight, History, MessageSquareText, Search, Trash2, ChevronDown, Users } from 'lucide-react'
+import { ArrowRight, History, MessageSquareText, Search, Trash2, ChevronDown, Users, X } from 'lucide-react'
 import { ORCH_ID } from '../agents.js'
 import { cn, cleanIcon, initials } from '../lib/utils.js'
 import { Api } from '../lib/api.js'
@@ -34,6 +34,8 @@ export default function ConversationsPage() {
   } = useMission()
   const navigate = useNavigate()
   const [query, setQuery] = useState('')
+  const [dateValue, setDateValue] = useState('') // '' = all dates, else 'YYYY-MM-DD' (calendar)
+  const [agentFilter, setAgentFilter] = useState('all') // 'all' | agentId
   const [backendSessions, setBackendSessions] = useState([])
   const [sessionsLoading, setSessionsLoading] = useState(true)
   const [sessionsError, setSessionsError] = useState('')
@@ -144,13 +146,30 @@ export default function ConversationsPage() {
     return Array.from(merged.values()).sort((a, b) => b.ts - a.ts)
   }, [agents, agentsById, backendSessions, savedChats, teamMeta, state.threads, getThread, currentSessionKey])
 
+  // Agents that actually appear in the conversation list (for the agent filter).
+  const agentOptions = useMemo(() => {
+    const seen = new Map()
+    for (const c of conversations) if (c.agentId && !seen.has(c.agentId)) seen.set(c.agentId, c.name || c.agentId)
+    return Array.from(seen, ([id, name]) => ({ id, name })).sort((a, b) => String(a.name).localeCompare(String(b.name)))
+  }, [conversations])
+
   const filtered = useMemo(() => {
     const q = query.trim().toLowerCase()
-    if (!q) return conversations
-    return conversations.filter((c) =>
-      [c.name, c.title, c.teamLabel, c.text, c.sessionKey].some((part) => String(part || '').toLowerCase().includes(q)),
-    )
-  }, [conversations, query])
+    // A chosen calendar day → that day's local [start, end) window.
+    let dayStart = 0, dayEnd = 0
+    if (dateValue) {
+      const [y, m, d] = dateValue.split('-').map(Number)
+      if (y && m && d) { dayStart = new Date(y, m - 1, d).getTime(); dayEnd = dayStart + 86400000 }
+    }
+    return conversations.filter((c) => {
+      if (dayStart && !((c.ts || 0) >= dayStart && (c.ts || 0) < dayEnd)) return false
+      if (agentFilter !== 'all' && c.agentId !== agentFilter) return false
+      if (q && ![c.name, c.title, c.teamLabel, c.text, c.sessionKey].some((part) => String(part || '').toLowerCase().includes(q))) return false
+      return true
+    })
+  }, [conversations, query, dateValue, agentFilter])
+
+  const hasFilters = query.trim() !== '' || dateValue !== '' || agentFilter !== 'all'
 
   const openConversation = async (entry) => {
     if (entry.kind === 'backend') {
@@ -176,14 +195,47 @@ export default function ConversationsPage() {
       title="Conversations"
       description="Recent active and saved chats across Main, team leads, and specialists."
       actions={
-        <div className="relative w-full sm:w-72">
-          <Search className="pointer-events-none absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-[color:var(--text-quiet)]" />
-          <input
-            value={query}
-            onChange={(e) => setQuery(e.target.value)}
-            placeholder="Search conversations"
-            className="h-10 w-full rounded-xl border border-[color:var(--border)] bg-white/80 pl-9 pr-3 text-sm text-strong outline-none transition focus:border-[color:var(--accent)] focus:ring-2 focus:ring-[color:var(--accent-soft)]"
-          />
+        <div className="flex w-full flex-wrap items-center gap-2 lg:w-auto">
+          <div className="relative min-w-[200px] flex-1 lg:w-60 lg:flex-none">
+            <Search className="pointer-events-none absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-[color:var(--text-quiet)]" />
+            <input
+              value={query}
+              onChange={(e) => setQuery(e.target.value)}
+              placeholder="Search conversations"
+              className="h-10 w-full rounded-xl border border-[color:var(--border)] bg-white/80 pl-9 pr-3 text-sm text-strong outline-none transition focus:border-[color:var(--accent)] focus:ring-2 focus:ring-[color:var(--accent-soft)]"
+            />
+          </div>
+          <select
+            value={agentFilter}
+            onChange={(e) => setAgentFilter(e.target.value)}
+            title="Filter by agent"
+            className="h-10 max-w-[180px] rounded-xl border border-[color:var(--border)] bg-white/80 px-3 text-sm font-medium text-strong outline-none transition focus:border-[color:var(--accent)] focus:ring-2 focus:ring-[color:var(--accent-soft)]"
+          >
+            <option value="all">All agents</option>
+            {agentOptions.map((a) => (
+              <option key={a.id} value={a.id}>{a.name}</option>
+            ))}
+          </select>
+          <div className="relative">
+            <input
+              type="date"
+              value={dateValue}
+              onChange={(e) => setDateValue(e.target.value)}
+              title="Filter by date"
+              className="h-10 rounded-xl border border-[color:var(--border)] bg-white/80 px-3 pr-8 text-sm font-medium text-strong outline-none transition focus:border-[color:var(--accent)] focus:ring-2 focus:ring-[color:var(--accent-soft)]"
+            />
+            {dateValue && (
+              <button
+                type="button"
+                onClick={() => setDateValue('')}
+                title="Clear date"
+                aria-label="Clear date"
+                className="absolute right-1.5 top-1/2 grid h-6 w-6 -translate-y-1/2 place-items-center rounded-md text-[color:var(--text-quiet)] transition hover:bg-[color:var(--surface-muted)] hover:text-strong"
+              >
+                <X className="h-3.5 w-3.5" />
+              </button>
+            )}
+          </div>
         </div>
       }
     >
@@ -198,10 +250,17 @@ export default function ConversationsPage() {
           <div className="mb-3 grid h-12 w-12 place-items-center rounded-2xl bg-[color:var(--accent-soft)] text-[color:var(--accent-strong)]">
             <MessageSquareText className="h-5 w-5" />
           </div>
-          <h3 className="text-base font-semibold text-strong">{sessionsLoading ? 'Loading conversations...' : 'No conversations found'}</h3>
+          <h3 className="text-base font-semibold text-strong">
+            {sessionsLoading ? 'Loading conversations...' : hasFilters ? 'No conversations match your filters' : 'No conversations found'}
+          </h3>
           <p className="mt-1 max-w-sm text-sm text-muted">
-            {sessionsLoading ? 'Pulling saved sessions from the broker.' : 'Start a chat in Mission Control and it will appear here.'}
+            {sessionsLoading ? 'Pulling saved sessions from the broker.' : hasFilters ? 'Try a different agent, date range, or search term.' : 'Start a chat in Mission Control and it will appear here.'}
           </p>
+          {!sessionsLoading && hasFilters && (
+            <Button variant="secondary" size="sm" className="mt-4" onClick={() => { setQuery(''); setDateValue(''); setAgentFilter('all') }}>
+              Clear filters
+            </Button>
+          )}
         </Card>
       ) : (
         <div className="grid gap-3 xl:grid-cols-2">

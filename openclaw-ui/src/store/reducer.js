@@ -85,10 +85,11 @@ export function reducer(s, a) {
       const t = { ...getT(s, aid), running: true }
       return {
         ...withT(s, aid, t),
-        // Stamp the run divider with the query + agent so the artifact can show a
-        // separate, labelled entry per query (run history). runId is filled in by
-        // 'run.tag' once the broker's /chat response returns it (for cross-device dedup).
-        timeline: s.timeline.concat({ id: rid(), kind: 'divider', text: a.title || 'run started', query: a.query || '', agent: aid, ts: Date.now(), runId: a.runId || null }),
+        // Stamp the run divider with the query + agent + session so the artifact can show a
+        // separate, labelled entry per query AND scope them to the current chat session (a
+        // "New chat" gets a fresh session, so its runs don't mix with the old chat's).
+        // runId is filled in by 'run.tag' once the broker's /chat response returns it.
+        timeline: s.timeline.concat({ id: rid(), kind: 'divider', text: a.title || 'run started', query: a.query || '', agent: aid, sessionKey: a.sessionKey || null, ts: Date.now(), runId: a.runId || null }),
       }
     }
     case 'run.tag': {

@@ -12,6 +12,7 @@ import PluginsPage from './pages/PluginsPage.jsx'
 import ScheduledPage from './pages/ScheduledPage.jsx'
 import GatewaysPage from './pages/GatewaysPage.jsx'
 import SettingsPage from './pages/SettingsPage.jsx'
+import { AdminGate } from './components/auth/AdminGate.jsx'
 
 export default function App() {
   return (
@@ -29,9 +30,9 @@ export default function App() {
         <Route path="/skills" element={<Navigate to="/skills/marketplace" replace />} />
         <Route path="/skills/marketplace" element={<MarketplacePage />} />
         <Route path="/skills/plugins" element={<PluginsPage />} />
-        <Route path="/gateways" element={<GatewaysPage />} />
-        <Route path="/organization" element={<SettingsPage />} />
-        <Route path="/settings" element={<SettingsPage />} />
+        <Route path="/gateways" element={<AdminGate><GatewaysPage /></AdminGate>} />
+        <Route path="/organization" element={<AdminGate><SettingsPage /></AdminGate>} />
+        <Route path="/settings" element={<AdminGate><SettingsPage /></AdminGate>} />
         <Route path="*" element={<Navigate to="/dashboard" replace />} />
       </Route>
     </Routes>

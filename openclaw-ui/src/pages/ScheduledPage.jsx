@@ -1,11 +1,12 @@
-import { useMemo, useState } from 'react'
+import { useEffect, useMemo, useState } from 'react'
 import { motion } from 'framer-motion'
 import {
   Bot, CalendarClock, CheckCircle2, Clock, History, Loader2, PauseCircle, Play, Plus,
-  RefreshCw, TerminalSquare, Timer, Trash2, XCircle,
+  RefreshCw, TerminalSquare, Timer, Trash2, XCircle, ChevronDown,
 } from 'lucide-react'
 import { Api, useApi } from '../lib/api.js'
 import { cn } from '../lib/utils.js'
+import { Markdown } from '../components/atoms/Markdown.jsx'
 import { useMission } from '../store/mission.jsx'
 import { PageLayout, EmptyPanel } from '../components/layout/PageLayout.jsx'
 import { SourceBadge } from '../components/atoms/SourceBadge.jsx'
@@ -45,12 +46,72 @@ function formatDuration(value) {
   return `${Math.floor(ms / 60000)}m ${Math.round((ms % 60000) / 1000)}s`
 }
 
+// Human label for the schedule across the broker's per-kind fields:
+// cron → `expr`, one-shot → `at` (ISO), interval → `every` (ms or "5m").
+function formatEvery(value) {
+  const n = Number(value)
+  if (Number.isFinite(n) && n > 0) {
+    if (n % 86400000 === 0) return n / 86400000 + 'd'
+    if (n % 3600000 === 0) return n / 3600000 + 'h'
+    if (n % 60000 === 0) return n / 60000 + 'm'
+    if (n % 1000 === 0) return n / 1000 + 's'
+    return n + 'ms'
+  }
+  return String(value)
+}
+
+function scheduleLabel(job) {
+  const at = valueOf(job, ['at', 'runAt', 'run_at'])
+  const every = valueOf(job, ['every', 'interval', 'intervalMs', 'interval_ms'])
+  const cron = valueOf(job, ['expr', 'cron', 'cronExpression', 'cron_expression', 'expression', 'schedule'])
+  const kind = String(valueOf(job, ['kind', 'type'], '')).toLowerCase()
+  if (kind.includes('interval') || (every != null && !cron && !at)) return 'Every ' + formatEvery(every)
+  if (kind.includes('once') || kind.includes('one') || kind === 'at' || (at && !cron)) return 'Once · ' + formatDate(at)
+  if (cron) return String(cron)
+  if (at) return 'Once · ' + formatDate(at)
+  if (every != null) return 'Every ' + formatEvery(every)
+  return '-'
+}
+
+// "in 4m 12s" / "12s ago" relative to now.
+function relTime(target) {
+  const diff = target - Date.now()
+  const s = Math.floor(Math.abs(diff) / 1000)
+  const label = s < 60 ? `${s}s`
+    : s < 3600 ? `${Math.floor(s / 60)}m ${s % 60}s`
+      : s < 86400 ? `${Math.floor(s / 3600)}h ${Math.floor((s % 3600) / 60)}m`
+        : `${Math.floor(s / 86400)}d ${Math.floor((s % 86400) / 3600)}h`
+  return diff >= 0 ? `in ${label}` : `${label} ago`
+}
+
+function NextRunValue({ value }) {
+  const [, force] = useState(0)
+  useEffect(() => { const id = setInterval(() => force((x) => x + 1), 1000); return () => clearInterval(id) }, [])
+  if (!value) return '-'
+  const target = typeof value === 'number' ? value : Date.parse(value)
+  if (!Number.isFinite(target)) return String(value)
+  const diff = target - Date.now()
+  return (
+    <span>
+      {formatDate(target)}{' '}
+      <span className={cn('font-semibold', diff >= 0 ? 'text-[color:var(--accent-strong)]' : 'text-[color:var(--warning)]')}>· {relTime(target)}</span>
+    </span>
+  )
+}
+
 function statusTone(status) {
   const s = String(status || '').toLowerCase()
   if (['success', 'succeeded', 'done', 'ok', 'completed', 'active', 'enabled'].includes(s)) return 'success'
   if (['running', 'queued', 'pending'].includes(s)) return 'warning'
   if (['failed', 'failure', 'error', 'disabled', 'paused'].includes(s)) return s === 'paused' || s === 'disabled' ? 'outline' : 'danger'
   return 'outline'
+}
+
+// A job is "executing right now" if its current run (or its own state) is running/queued.
+function isRunning(job) {
+  const run = String(job?.latest?.status || '').toLowerCase()
+  const own = String(job?.status || '').toLowerCase()
+  return ['running', 'queued', 'pending', 'in_progress'].includes(run) || own === 'running'
 }
 
 function normalizeRun(run = {}) {
@@ -62,6 +123,15 @@ function normalizeRun(run = {}) {
     durationMs: valueOf(run, ['durationMs', 'duration_ms', 'elapsedMs', 'elapsed_ms']),
     output: valueOf(run, ['output', 'summary', 'message', 'resultText', 'result_text', 'stdout', 'lastOutput'], ''),
     error: valueOf(run, ['error', 'stderr', 'lastError'], ''),
+  }
+}
+
+// A past cron run (from GET /cron/runs) — survives even if its job was deleted/disabled.
+function normalizeHistoryRun(run = {}) {
+  return {
+    ...normalizeRun(run),
+    name: String(valueOf(run, ['name', 'jobName', 'job_name', 'title'], 'Scheduled run')),
+    agent: valueOf(run, ['agent', 'agentName', 'agent_name', 'agentId', 'agent_id'], ''),
   }
 }
 
@@ -87,11 +157,11 @@ function normalizeJob(job = {}) {
     id: String(valueOf(job, ['id', 'name', 'key'], 'job')),
     name: String(valueOf(job, ['name', 'title', 'id'], 'Scheduled job')),
     status: String(status),
-    schedule: String(valueOf(job, ['schedule', 'cron', 'cronExpression', 'cron_expression', 'expression'], '-')),
+    schedule: scheduleLabel(job),
     timezone: valueOf(job, ['timezone', 'tz'], ''),
     agent: valueOf(job, ['agent', 'agentName', 'agent_name', 'agentId', 'agent_id', 'session', 'sessionKey'], 'Main'),
     message: valueOf(job, ['message', 'prompt', 'task', 'description'], ''),
-    nextRun: valueOf(job, ['nextRun', 'next_run', 'nextAt', 'next_at', 'next']),
+    nextRun: valueOf(job, ['nextRun', 'next_run', 'nextAt', 'next_at', 'next', 'nextWakeAtMs', 'next_wake_at_ms']),
     lastRun: valueOf(job, ['lastRun', 'last_run', 'lastAt', 'last_at', 'last']),
     runCount: valueOf(job, ['runCount', 'run_count', 'runsCount', 'runs_count', 'totalRuns', 'total_runs'], runs.length || 0),
     successCount: valueOf(job, ['successCount', 'success_count', 'successfulRuns', 'successful_runs']),
@@ -115,9 +185,16 @@ function Stat({ label, value, icon: Icon }) {
   )
 }
 
-function OutputPreview({ job }) {
+function OutputPreview({ job, running }) {
   const text = job.latest.error || job.latest.output
   if (!text) {
+    if (running) {
+      return (
+        <div className="flex items-center gap-2 rounded-lg border border-[color:var(--border-accent)] bg-[color:var(--accent-soft)] px-3 py-3 text-sm text-[color:var(--accent-strong)]">
+          <Loader2 className="h-4 w-4 animate-spin" /> Running now — output will appear here when it finishes.
+        </div>
+      )
+    }
     return (
       <div className="rounded-lg border border-dashed border-[color:var(--border)] bg-[color:var(--surface-muted)] px-3 py-3 text-sm text-muted">
         No output recorded for the latest run.
@@ -133,6 +210,34 @@ function OutputPreview({ job }) {
     )}>
       {text}
     </div>
+  )
+}
+
+// One past run in the Recent-runs list — expands to its (markdown) output.
+function HistoryRow({ run }) {
+  const [open, setOpen] = useState(false)
+  const text = run.error || run.output
+  return (
+    <Card className="p-0">
+      <button type="button" onClick={() => text && setOpen((o) => !o)} className={cn('flex w-full items-center gap-3 px-4 py-3 text-left', !text && 'cursor-default')}>
+        <Badge variant={statusTone(run.status)}>{run.status}</Badge>
+        <div className="min-w-0 flex-1">
+          <div className="truncate text-sm font-semibold text-strong">{run.name}</div>
+          <div className="truncate text-xs text-muted">
+            {run.agent ? run.agent + ' · ' : ''}{formatDate(run.startedAt)}{run.durationMs != null && run.durationMs !== '' ? ' · ' + formatDuration(run.durationMs) : ''}
+          </div>
+        </div>
+        {text && <ChevronDown className={cn('h-4 w-4 shrink-0 text-[color:var(--text-quiet)] transition-transform', open && 'rotate-180')} />}
+      </button>
+      {open && text && (
+        <div className="border-t border-[color:var(--border)] px-4 py-3">
+          <div className={cn('max-h-80 overflow-y-auto rounded-lg border px-3 py-2 text-[12px] leading-relaxed scrollbar-thin',
+            run.error ? 'border-rose-200 bg-rose-50 text-rose-700' : 'border-[color:var(--border)] bg-[color:var(--surface-muted)] text-strong')}>
+            <Markdown content={text} />
+          </div>
+        </div>
+      )}
+    </Card>
   )
 }
 
@@ -153,13 +258,23 @@ const blankJob = () => ({
 })
 
 export default function ScheduledPage() {
-  const { agents } = useMission()
+  const { agents, currentSessionKey } = useMission()
   const { data, source, loading, reload } = useApi(() => Api.cron.list(), [])
+  const { data: historyData, reload: reloadHistory } = useApi(() => Api.cron.history(), [])
   const [formOpen, setFormOpen] = useState(false)
   const [form, setForm] = useState(blankJob)
   const [busy, setBusy] = useState('')
   const [error, setError] = useState('')
   const jobs = useMemo(() => (data || []).map(normalizeJob), [data])
+  const history = useMemo(() => (historyData || []).map(normalizeHistoryRun), [historyData])
+  const anyRunning = jobs.some(isRunning)
+  // Poll so a job that fires shows its running state + output live here — faster while
+  // running, slower when idle. (Needs the broker to report run status/output, and to expose
+  // GET /cron/runs for past runs of self-deleted/disabled one-shots.)
+  useEffect(() => {
+    const id = setInterval(() => { reload(); reloadHistory() }, anyRunning ? 4000 : 12000)
+    return () => clearInterval(id)
+  }, [reload, reloadHistory, anyRunning])
   const agentOptions = useMemo(() => (
     (agents || []).map((agent) => ({
       id: agent.id,
@@ -195,6 +310,9 @@ export default function ScheduledPage() {
       cron: form.cron.trim(),
       timezone: form.timezone.trim() || undefined,
       message: form.message.trim(),
+      // Route the run's result into this agent's chat thread (broker delivers there),
+      // so the output lands where you'd look for it. Harmless if the broker ignores it.
+      sessionKey: currentSessionKey ? currentSessionKey(form.agent || 'main') : undefined,
     }
     if (!payload.name || !payload.cron || !payload.message) {
       setError('Name, schedule, and message are required.')
@@ -245,6 +363,7 @@ export default function ScheduledPage() {
               </Field>
               <Field label="Schedule">
                 <Input value={form.cron} onChange={(e) => setForm((f) => ({ ...f, cron: e.target.value }))} className="font-mono" placeholder="0 9 * * MON" />
+                <p className="mt-1 text-[11px] text-muted">Cron expression = recurring (stays on this page). One-time jobs self-delete after running — their output goes to the agent's chat.</p>
               </Field>
               <Field label="Timezone">
                 <Input value={form.timezone} onChange={(e) => setForm((f) => ({ ...f, timezone: e.target.value }))} placeholder="Asia/Calcutta" />
@@ -286,7 +405,7 @@ export default function ScheduledPage() {
 
       {error && !formOpen && <div className="mb-4 rounded-xl border border-rose-200 bg-rose-50 px-3 py-2 text-sm text-rose-700">{error}</div>}
 
-      {loading ? (
+      {loading && !data ? (
         <div className="space-y-3">
           {Array.from({ length: 3 }).map((_, i) => <div key={i} className="h-32 animate-pulse rounded-lg border border-[color:var(--border)] bg-[color:var(--surface)]" />)}
         </div>
@@ -308,19 +427,29 @@ export default function ScheduledPage() {
           </div>
 
           <div className="space-y-3">
-            {jobs.map((job, i) => (
+            {jobs.map((job, i) => {
+              const running = isRunning(job)
+              return (
               <motion.div key={job.id} initial={{ opacity: 0, y: 12 }} animate={{ opacity: 1, y: 0 }} transition={{ delay: i * 0.04 }}>
-                <Card className="overflow-hidden p-0">
+                <Card className={cn('overflow-hidden p-0 transition', running && 'border-[color:var(--accent)] shadow-[0_0_0_3px_var(--accent-soft)]')}>
                   <div className="flex flex-wrap items-start justify-between gap-4 border-b border-[color:var(--border)] px-5 py-4">
                     <div className="flex min-w-0 items-start gap-3">
-                      <div className="grid h-11 w-11 shrink-0 place-items-center rounded-lg text-white shadow-sm [background-image:var(--grad-brand)]">
-                        <Clock className="h-5 w-5" />
+                      <div className={cn('grid h-11 w-11 shrink-0 place-items-center rounded-lg text-white shadow-sm [background-image:var(--grad-brand)]', running && 'animate-pulse-ring')}>
+                        {running ? <Loader2 className="h-5 w-5 animate-spin" /> : <Clock className="h-5 w-5" />}
                       </div>
                       <div className="min-w-0">
                         <div className="flex flex-wrap items-center gap-2">
                           <h3 className="truncate text-base font-semibold text-strong">{job.name}</h3>
-                          <Badge variant={statusTone(job.status)}>{job.status}</Badge>
-                          <Badge variant={statusTone(job.latest.status)}>{job.latest.status}</Badge>
+                          {running ? (
+                            <span className="inline-flex items-center gap-1.5 rounded-full bg-[color:var(--warning-soft)] px-2 py-0.5 text-[11px] font-semibold text-[color:var(--warning)]">
+                              <span className="h-1.5 w-1.5 animate-pulse rounded-full bg-[color:var(--warning)]" /> Running now
+                            </span>
+                          ) : (
+                            <>
+                              <Badge variant={statusTone(job.status)}>{job.status}</Badge>
+                              <Badge variant={statusTone(job.latest.status)}>{job.latest.status}</Badge>
+                            </>
+                          )}
                         </div>
                         <div className="mt-1 flex flex-wrap items-center gap-x-4 gap-y-1 text-xs text-muted">
                           <span className="inline-flex items-center gap-1 font-mono">
@@ -350,7 +479,12 @@ export default function ScheduledPage() {
 
                   <div className="grid gap-4 px-5 py-4 lg:grid-cols-[1fr_1.2fr]">
                     <div className="grid gap-2 sm:grid-cols-2">
-                      <Info icon={Timer} label="Next run" value={formatDate(job.nextRun)} />
+                      <div className="rounded-lg border border-[color:var(--border)] bg-[color:var(--surface-muted)] px-3 py-2.5">
+                        <div className="flex items-center gap-1.5 text-[11px] font-semibold uppercase tracking-wide text-[color:var(--text-quiet)]">
+                          <Timer className="h-3.5 w-3.5" /> Next run
+                        </div>
+                        <div className="mt-1 text-sm font-medium text-strong"><NextRunValue value={job.nextRun} /></div>
+                      </div>
                       <Info icon={History} label="Last run" value={formatDate(job.lastRun || job.latest.startedAt)} />
                       <Info icon={CheckCircle2} label="Successful" value={job.successCount ?? '-'} />
                       <Info icon={XCircle} label="Failed" value={job.failureCount ?? '-'} />
@@ -369,7 +503,7 @@ export default function ScheduledPage() {
                         <div className="text-xs font-semibold uppercase tracking-wide text-[color:var(--text-quiet)]">Latest output</div>
                         {job.latest.finishedAt && <div className="text-xs text-muted">{formatDate(job.latest.finishedAt)}</div>}
                       </div>
-                      <OutputPreview job={job} />
+                      <OutputPreview job={job} running={running} />
                     </div>
                   </div>
 
@@ -391,7 +525,19 @@ export default function ScheduledPage() {
                   )}
                 </Card>
               </motion.div>
-            ))}
+              )
+            })}
+          </div>
+        </div>
+      )}
+
+      {history.length > 0 && (
+        <div className="mt-6">
+          <div className="mb-3 flex items-center gap-2 text-sm font-semibold uppercase tracking-wide text-[color:var(--text-quiet)]">
+            <History className="h-4 w-4" /> Recent runs
+          </div>
+          <div className="space-y-2">
+            {history.map((run) => <HistoryRow key={run.id} run={run} />)}
           </div>
         </div>
       )}

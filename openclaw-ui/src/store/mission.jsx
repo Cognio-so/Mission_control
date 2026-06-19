@@ -293,7 +293,7 @@ export function MissionProvider({ children }) {
         const runs = await Api.chatRuns(sk)
         if (!runs || !runs.length) return
         const groups = runs.map((r) => {
-          const items = [{ id: r.runId, kind: 'divider', text: r.query || 'run', query: r.query || '', agent: r.agentId || agentId, ts: r.startedAt || 0, runId: r.runId }]
+          const items = [{ id: r.runId, kind: 'divider', text: r.query || 'run', query: r.query || '', agent: r.agentId || agentId, sessionKey: r.sessionKey || sk, ts: r.startedAt || 0, runId: r.runId }]
           for (const c of r.calls || []) {
             items.push({ id: 'srv_' + r.runId + '_' + c.key, kind: 'sub', key: c.key, title: c.name || c.key, parent: r.agentId || agentId, sub: c.role || c.kind || 'Delegated task', badge: c.status || 'done', stream: c.output || '' })
           }
