@@ -6,7 +6,7 @@ import { cn } from '../../lib/utils.js'
 export function SourceBadge({ source, className }) {
   if (source === 'broker') {
     return (
-      <span className={cn('inline-flex items-center gap-1.5 rounded-full border border-[#b7ded4] bg-[#eef8f4] px-2.5 py-1 text-[10px] font-semibold uppercase tracking-wide text-[#12524c]', className)}>
+      <span className={cn('inline-flex items-center gap-1.5 rounded-full border border-[color:var(--border-accent)] bg-[color:var(--success-soft)] px-2.5 py-1 text-[10px] font-semibold uppercase tracking-wide text-[color:var(--success)]', className)}>
         <Cloud className="h-3 w-3" /> Live
       </span>
     )
@@ -15,7 +15,7 @@ export function SourceBadge({ source, className }) {
     return (
       <span
         title="Bundled demo data — set VITE_USE_DEMO_DATA=1 off / add the broker endpoint to go live."
-        className={cn('inline-flex items-center gap-1.5 rounded-full border border-[#ead9ad] bg-[#fff6df] px-2.5 py-1 text-[10px] font-semibold uppercase tracking-wide text-[#8a5c16]', className)}
+        className={cn('inline-flex items-center gap-1.5 rounded-full border border-transparent bg-[color:var(--warning-soft)] px-2.5 py-1 text-[10px] font-semibold uppercase tracking-wide text-[color:var(--warning)]', className)}
       >
         <Database className="h-3 w-3" /> Demo data
       </span>

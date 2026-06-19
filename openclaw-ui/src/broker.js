@@ -21,6 +21,126 @@ function shortJson(v) {
   }
 }
 
+function subBadge(s) {
+  const v = String(s || '').toLowerCase()
+  if (!v) return ''
+  if (/(done|complete|completed|delivered|finished|success|succeeded)/.test(v)) return 'done'
+  // Only real failure words — NOT "closed"/"stuck"/"stalled", which are normal
+  // substream-lifecycle terms and were falsely flagging working agents as errored.
+  if (/(error|fail|timeout|abort|crash|exception|fatal)/.test(v)) return 'error'
+  if (/(run|active|stream|progress|working|started|thinking|spawn|delegat)/.test(v)) return 'running'
+  if (/(queue|pending|created|idle|ready|waiting)/.test(v)) return 'queued'
+  return ''
+}
+
+function words(value) {
+  return String(value || '')
+    .replace(/[_-]+/g, ' ')
+    .replace(/([a-z])([A-Z])/g, '$1 $2')
+    .replace(/\s+/g, ' ')
+    .trim()
+}
+
+function titleCase(value) {
+  const v = words(value)
+  return v ? v.replace(/\b\w/g, c => c.toUpperCase()) : ''
+}
+
+function cleanDetail(value) {
+  if (value == null) return ''
+  if (typeof value === 'string') return value.trim()
+  if (typeof value === 'number' || typeof value === 'boolean') return String(value)
+  if (Array.isArray(value)) return value.map(cleanDetail).filter(Boolean).join(', ')
+  if (typeof value === 'object') {
+    if (typeof value.progressText === 'string') return value.progressText.trim()
+    if (typeof value.message === 'string') return value.message.trim()
+    if (typeof value.text === 'string') return value.text.trim()
+    if (typeof value.content === 'string') return value.content.trim()
+    if (typeof value.query === 'string') return value.query.trim()
+    if (typeof value.url === 'string') return value.url.trim()
+    if (typeof value.path === 'string') return value.path.trim()
+    if (typeof value.command === 'string') return value.command.trim()
+    if (typeof value.prompt === 'string') return value.prompt.trim()
+    if (typeof value.title === 'string' && value.title.toLowerCase() !== 'preamble') return value.title.trim()
+  }
+  return ''
+}
+
+function findPublicDetail(value, depth = 0) {
+  if (!value || depth > 4) return ''
+  if (typeof value !== 'object') return ''
+  const direct = cleanDetail(value)
+  if (direct) return direct
+  const keys = ['query', 'q', 'url', 'href', 'path', 'file', 'command', 'prompt', 'message', 'text', 'input', 'args', 'parameters']
+  for (const key of keys) {
+    const found = cleanDetail(value[key])
+    if (found) return found
+  }
+  for (const key of Object.keys(value)) {
+    const child = value[key]
+    if (!child || typeof child !== 'object') continue
+    const found = findPublicDetail(child, depth + 1)
+    if (found) return found
+  }
+  return ''
+}
+
+function publicDetailFromPayload(payload) {
+  const data = payload?.data && typeof payload.data === 'object' ? payload.data : {}
+  return (
+    cleanDetail(data.progressText) ||
+    cleanDetail(data.deltaText) ||
+    cleanDetail(data.message) ||
+    cleanDetail(data.text) ||
+    cleanDetail(data.title && data.title.toLowerCase() !== 'preamble' ? data.title : '') ||
+    cleanDetail(payload?.message) ||
+    findPublicDetail(data.args || data.input || data.parameters || payload?.args || payload?.input || payload?.parameters || payload)
+  )
+}
+
+function opSessionKey(payload) {
+  const d = payload?.data || {}
+  return d.sessionKey || payload.sessionKey || payload.brokerSessionKey || ''
+}
+
+function normalizeOperationPayload(payload) {
+  const data = payload?.data && typeof payload.data === 'object' ? payload.data : {}
+  const stream = String(payload?.stream || payload?.event || payload?.type || '').trim()
+  const phase = String(data.phase || payload?.phase || payload?.status || '').trim()
+  const rawKind = String(data.kind || payload?.kind || payload?.type || payload?.operation || '').trim()
+  const detail = publicDetailFromPayload(payload)
+
+  if (payload?.isHeartbeat) return null
+  const lifecycle = /lifecycle/i.test(stream)
+  const noisyLifecycle = new Set(['thread_ready', 'turn_starting', 'startup', 'start', 'started', 'completed', 'end', 'done'])
+  if (!detail && lifecycle && noisyLifecycle.has(phase.toLowerCase())) return null
+  if (!detail && !data.tool && !data.toolName && noisyLifecycle.has(phase.toLowerCase())) return null
+
+  let kind = 'operation'
+  const hay = stream + ' ' + rawKind + ' ' + phase + ' ' + detail
+  if (detail && !data.tool && !data.toolName && /hook|lifecycle|userMessage/i.test(stream + ' ' + rawKind)) kind = 'agent'
+  else if (/skill/i.test(hay)) kind = 'skill'
+  else if (/plugin/i.test(hay)) kind = 'plugin'
+  else if (/tool|pretool|posttool|command|shell/i.test(hay)) kind = 'tool'
+  if (!detail && kind !== 'tool' && kind !== 'skill' && kind !== 'plugin' && !payload?.name) return null
+
+  const label =
+    cleanDetail(data.tool || data.toolName || payload?.tool || payload?.name) ||
+    (phase && !noisyLifecycle.has(phase.toLowerCase()) ? titleCase(phase) : '') ||
+    cleanDetail(data.title && data.title.toLowerCase() !== 'preamble' ? data.title : '') ||
+    (kind === 'tool' ? 'Tool activity' : 'Agent activity')
+
+  return {
+    kind,
+    label,
+    detail,
+    phase,
+    stream,
+    sessionKey: opSessionKey(payload),
+    status: /error|failed|aborted/i.test(phase) ? 'error' : /complete|done|end/i.test(phase) ? 'done' : 'running',
+  }
+}
+
 function trim(u) {
   return (u || '').trim().replace(/\/+$/, '')
 }
@@ -204,6 +324,10 @@ export class BrokerClient {
       this.raw('in', '< agent ' + String(e.data).slice(0, 300))
       this.onOperation(e.data)
     })
+    es.addEventListener('subagent', e => {
+      this.raw('in', '< subagent ' + String(e.data).slice(0, 300))
+      this.onSubagent(e.data)
+    })
     es.onmessage = e => {
       this.raw('in', '< ' + String(e.data).slice(0, 300))
       this.onChat(e.data)
@@ -235,9 +359,21 @@ export class BrokerClient {
     if (isChild) {
       const key = sk || ('child_' + (p.runId || ''))
       const parent = this.who(p.spawnedBy) || this.pendingAgent
-      if (p.state === 'delta') this.d({ type: 'sub.delta', key, parent, text: p.deltaText || '', replace: p.replace === true })
-      else if (p.state === 'final') this.d({ type: 'sub.status', key, status: 'done' })
-      else if (p.state === 'error' || p.state === 'aborted') this.d({ type: 'sub.status', key, status: 'error' })
+      const name = p.displayName || p.subagentRole || undefined
+      if (p.state === 'delta') {
+        this.d({ type: 'sub.delta', key, parent, name, text: p.deltaText || '', replace: p.replace === true })
+      } else if (p.state === 'final') {
+        // Capture the subagent's final output too — many specialists send their whole
+        // result as one 'final' message rather than streamed deltas; without this their
+        // output was dropped and only the status survived.
+        const finalText = textOf(p.message)
+        if (finalText) this.d({ type: 'sub.delta', key, parent, name, text: finalText, replace: true })
+        this.d({ type: 'sub.status', key, status: 'done' })
+      } else if (p.state === 'error' || p.state === 'aborted') {
+        const errText = textOf(p.message)
+        if (errText) this.d({ type: 'sub.delta', key, parent, name, text: errText, replace: true })
+        this.d({ type: 'sub.status', key, status: 'error' })
+      }
       return
     }
 
@@ -263,15 +399,62 @@ export class BrokerClient {
     try { p = JSON.parse(data) } catch { return }
     const payload = (p && p.payload) || p
     const tool = payload.tool || payload.name || payload.toolName || 'tool'
-    this.d({ type: 'node', node: { cls: 'tool', head: 'Tool / ' + tool, tag: 'event', sub: shortJson(payload) } })
+    const hay = [tool, payload.type, payload.kind, payload.phase].join(' ')
+    const kind = /plugin/i.test(hay) ? 'plugin' : /skill/i.test(hay) ? 'skill' : 'tool'
+    const args = payload.args || payload.input || payload.parameters || {}
+    const detail =
+      cleanDetail(payload.summary) ||
+      cleanDetail(payload.result) ||
+      findPublicDetail(args) ||
+      cleanDetail(payload.error)
+    const status = /error|failed/i.test(String(payload.phase || payload.status || payload.error || ''))
+      ? 'error'
+      : /result|done|final|complete/i.test(String(payload.phase || payload.status || ''))
+        ? 'done'
+        : 'running'
+    this.d({
+      type: 'node',
+      node: {
+        cls: kind === 'tool' ? 'tool' : kind,
+        head: titleCase(tool),
+        tag: kind,
+        sub: detail,
+        status,
+        op: { kind, label: titleCase(tool), detail, status, sessionKey: opSessionKey(payload), phase: String(payload.phase || payload.status || ''), stream: 'tool' },
+      },
+    })
   }
 
   onOperation(data) {
     let p
     try { p = JSON.parse(data) } catch { return }
     const payload = (p && p.payload) || p
-    const label = payload.type || payload.operation || payload.event || payload.name || 'operation'
-    this.d({ type: 'node', node: { cls: 'tool', head: 'Operation / ' + label, tag: 'event', sub: shortJson(payload) } })
+    const op = normalizeOperationPayload(payload)
+    if (!op) return
+    this.d({
+      type: 'node',
+      node: {
+        cls: op.kind === 'tool' ? 'tool' : op.kind,
+        head: op.label,
+        tag: op.kind,
+        sub: op.detail,
+        status: op.status,
+        op,
+      },
+    })
+  }
+
+  onSubagent(data) {
+    let p
+    try { p = JSON.parse(data) } catch { return }
+    const key = p.brokerSessionKey || p.sessionKey
+    if (!key) return
+    const parent = this.who(p.spawnedBy || p.spawnedByRaw) || this.pendingAgent
+    const name = p.displayName || p.subagentRole || key
+    const badge = subBadge(p.status)
+    // create or enrich the child node (sub.spawn upserts in the reducer)
+    this.d({ type: 'sub.spawn', key, name, parent, task: p.subagentRole || '', status: badge || 'queued' })
+    if (badge === 'done' || badge === 'error') this.d({ type: 'sub.status', key, status: badge })
   }
 
   async uploadFiles(files, opts = {}) {
@@ -299,13 +482,37 @@ export class BrokerClient {
     return Array.isArray(j.files) ? j.files : []
   }
 
+  // Ask the broker to abort a run. Pass { sessionKey } to stop a chat + its whole
+  // subagent subtree (server-side cascade), { runId } for one run, or { all: true }
+  // to panic-stop everything. The UI soft-stop is handled by the store.
+  async stopRun(body = {}) {
+    const base = trim(this.cfg.base)
+    if (!base) return { ok: false, error: 'no broker configured' }
+    try {
+      const r = await fetch(base + '/chat/stop', {
+        method: 'POST',
+        headers: authHeaders(this.cfg.secret, true),
+        credentials: 'include',
+        body: JSON.stringify(body),
+      })
+      const j = await r.json().catch(() => ({}))
+      notifyUnauthorized(r)
+      if (!r.ok || j.ok === false) throw new Error((j && j.error) || ('HTTP ' + r.status + ' ' + r.statusText))
+      this.raw('sys', 'POST /chat/stop ok / scope=' + (j.scope || '?') + ' / aborted=' + (j.count != null ? j.count : '?'))
+      return j
+    } catch (err) {
+      this.raw('err', 'POST /chat/stop failed: ' + err.message)
+      throw err
+    }
+  }
+
   async sendMessage(text, opts = {}) {
     const base = trim(this.cfg.base)
     const sessionKey = opts.sessionKey || this.cfg.session || 'main'
     const agent = opts.agentId || this.pendingAgent
     this.pendingAgent = agent
     if (this.streamSessionKey !== sessionKey || !this.es) await this.connect(sessionKey)
-    this.d({ type: 'run.start', agent, title: (opts.label || sessionKey) })
+    this.d({ type: 'run.start', agent, title: (opts.label || sessionKey), query: text })
     this.d({ type: 'assistant.start', agent })
 
     try {
@@ -325,6 +532,7 @@ export class BrokerClient {
       notifyUnauthorized(r)
       if (!r.ok || j.ok === false) throw new Error((j && j.error) || ('HTTP ' + r.status + ' ' + r.statusText))
       this.raw('sys', 'POST /chat ok / agent=' + agent + ' / session=' + sessionKey + ' / runId=' + (j.runId || '?'))
+      if (j.runId) this.d({ type: 'run.tag', agent, runId: j.runId })
     } catch (err) {
       this.raw('err', 'POST /chat failed: ' + err.message)
       this.d({ type: 'node', node: { cls: 'error', head: 'Send failed', sub: err.message } })

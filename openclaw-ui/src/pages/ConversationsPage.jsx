@@ -1,19 +1,64 @@
-import { useMemo, useState } from 'react'
+import { useEffect, useMemo, useState } from 'react'
 import { useNavigate } from 'react-router-dom'
-import { ArrowRight, History, MessageSquareText, Search, Trash2 } from 'lucide-react'
+import { ArrowRight, History, MessageSquareText, Search, Trash2, ChevronDown, Users } from 'lucide-react'
 import { ORCH_ID } from '../agents.js'
 import { cn, cleanIcon, initials } from '../lib/utils.js'
+import { Api } from '../lib/api.js'
 import { useMission } from '../store/mission.jsx'
 import { PageLayout } from '../components/layout/PageLayout.jsx'
 import { Card } from '../components/ui/card.jsx'
 import { Button } from '../components/ui/button.jsx'
+import { Markdown } from '../components/atoms/Markdown.jsx'
+
+// A delegated subagent session is not a standalone conversation — it belongs under the
+// query that spawned it, so we keep it out of the top-level list and nest it instead.
+function isSubagentSession(s) {
+  if (!s) return false
+  if (s.spawnedBy || s.parentSessionKey || s.parentKey || s.isSubagent) return true
+  if (typeof s.spawnDepth === 'number' && s.spawnDepth > 0) return true
+  const t = String(s.title || '').trim()
+  const lm = String(s.lastMessage || '')
+  const key = String(s.sessionKey || '')
+  if (/^\[subagent context\]/i.test(t) || /running as a subagent/i.test(t + ' ' + lm) || /\(depth\s*\d+\s*\//i.test(t)) return true
+  if (/(^|:)subagent[:-]/i.test(key)) return true
+  return false
+}
+
+const SUB_COLOR = { queued: 'var(--warning)', running: 'var(--info)', done: 'var(--success)', error: 'var(--danger)', stopped: 'var(--text-quiet)' }
+const subColor = (s) => SUB_COLOR[s] || SUB_COLOR.done
 
 export default function ConversationsPage() {
   const {
-    agents, agentsById, teams, activeId, setActiveId, state, savedChats, resumeChat, deleteConversation, getThread,
+    agents, agentsById, teams, activeId, setActiveId, state, savedChats, resumeChat, deleteConversation,
+    openBackendSession, deleteBackendSession, currentSessionKey, getThread,
   } = useMission()
   const navigate = useNavigate()
   const [query, setQuery] = useState('')
+  const [backendSessions, setBackendSessions] = useState([])
+  const [sessionsLoading, setSessionsLoading] = useState(true)
+  const [sessionsError, setSessionsError] = useState('')
+
+  useEffect(() => {
+    let alive = true
+    async function loadSessions() {
+      setSessionsLoading(true)
+      setSessionsError('')
+      try {
+        const sessions = await Api.chatSessions()
+        if (alive) setBackendSessions(Array.isArray(sessions) ? sessions : [])
+      } catch (err) {
+        if (alive) setSessionsError(err.message || 'Could not load conversations')
+      } finally {
+        if (alive) setSessionsLoading(false)
+      }
+    }
+    loadSessions()
+    window.addEventListener('focus', loadSessions)
+    return () => {
+      alive = false
+      window.removeEventListener('focus', loadSessions)
+    }
+  }, [])
 
   const teamMeta = useMemo(() => {
     const map = new Map([[ORCH_ID, { label: 'Central', team: 'Central', role: 'Main' }]])
@@ -37,6 +82,7 @@ export default function ConversationsPage() {
         return {
           kind: 'active',
           cid: 'active_' + entry.agent.id,
+          sessionKey: currentSessionKey(entry.agent.id),
           agentId: entry.agent.id,
           name: entry.agent.name,
           icon: entry.agent.icon,
@@ -54,6 +100,7 @@ export default function ConversationsPage() {
         return {
           kind: 'saved',
           cid: chat.cid,
+          sessionKey: chat.sessionKey,
           agentId: chat.agentId,
           name: agent?.name || (chat.agentId === ORCH_ID ? 'Main' : chat.name || chat.agentId),
           icon: agent?.icon || chat.icon,
@@ -64,21 +111,63 @@ export default function ConversationsPage() {
         }
       })
 
-    return [...active, ...saved].sort((a, b) => b.ts - a.ts)
-  }, [agents, agentsById, savedChats, teamMeta, state.threads, getThread])
+    const backend = (backendSessions || []).map((session, index) => {
+      const sessionKey = String(session?.sessionKey || '')
+      const agentId = normalizeSessionAgent(sessionKey, session?.agentId)
+      const agent = agentsById[agentId]
+      const meta = teamMeta.get(agentId) || {}
+      const title = String(session?.title || '').trim()
+      const lastMessage = String(session?.lastMessage || '').trim()
+      return {
+        kind: 'backend',
+        cid: 'backend_' + (sessionKey || index),
+        sessionKey,
+        agentId,
+        name: agent?.name || (agentId === ORCH_ID ? 'Main' : session?.agentName || agentId),
+        icon: agent?.icon || (agentId === ORCH_ID ? 'CG' : null),
+        teamLabel: meta.label || (agentId === ORCH_ID ? 'Central' : 'Saved session'),
+        title,
+        text: lastMessage || title || '',
+        ts: toMs(session?.updatedAt),
+        count: typeof session?.messageCount === 'number' ? session.messageCount : null,
+        server: session,
+      }
+    }).filter((entry) => entry.sessionKey && !isSubagentSession(entry.server))
+
+    const merged = new Map()
+    for (const entry of backend) merged.set(entry.sessionKey, entry)
+    for (const entry of [...active, ...saved]) {
+      const key = entry.sessionKey || entry.cid
+      if (key && merged.has(key)) continue
+      merged.set(key || entry.cid, entry)
+    }
+    return Array.from(merged.values()).sort((a, b) => b.ts - a.ts)
+  }, [agents, agentsById, backendSessions, savedChats, teamMeta, state.threads, getThread, currentSessionKey])
 
   const filtered = useMemo(() => {
     const q = query.trim().toLowerCase()
     if (!q) return conversations
     return conversations.filter((c) =>
-      [c.name, c.teamLabel, c.text].some((part) => String(part || '').toLowerCase().includes(q)),
+      [c.name, c.title, c.teamLabel, c.text, c.sessionKey].some((part) => String(part || '').toLowerCase().includes(q)),
     )
   }, [conversations, query])
 
-  const openConversation = (entry) => {
-    if (entry.kind === 'saved') resumeChat(entry.saved)
+  const openConversation = async (entry) => {
+    if (entry.kind === 'backend') {
+      const ok = await openBackendSession(entry.server)
+      if (!ok) return
+    } else if (entry.kind === 'saved') resumeChat(entry.saved)
     else setActiveId(entry.agentId)
     navigate('/mission')
+  }
+
+  const removeConversation = async (entry) => {
+    if (entry.kind === 'backend') {
+      const ok = await deleteBackendSession(entry.sessionKey)
+      if (ok) setBackendSessions((prev) => prev.filter((s) => s.sessionKey !== entry.sessionKey))
+      return
+    }
+    deleteConversation(entry)
   }
 
   return (
@@ -98,14 +187,20 @@ export default function ConversationsPage() {
         </div>
       }
     >
+      {sessionsError && (
+        <div className="mb-4 rounded-xl border border-amber-200 bg-amber-50 px-4 py-3 text-sm text-amber-800">
+          Backend conversations could not be loaded: {sessionsError}. Local drafts are still shown.
+        </div>
+      )}
+
       {filtered.length === 0 ? (
         <Card className="flex min-h-[360px] flex-col items-center justify-center border-dashed bg-white/60 text-center">
           <div className="mb-3 grid h-12 w-12 place-items-center rounded-2xl bg-[color:var(--accent-soft)] text-[color:var(--accent-strong)]">
             <MessageSquareText className="h-5 w-5" />
           </div>
-          <h3 className="text-base font-semibold text-strong">No conversations found</h3>
+          <h3 className="text-base font-semibold text-strong">{sessionsLoading ? 'Loading conversations...' : 'No conversations found'}</h3>
           <p className="mt-1 max-w-sm text-sm text-muted">
-            Start a chat in Mission Control and it will appear here.
+            {sessionsLoading ? 'Pulling saved sessions from the broker.' : 'Start a chat in Mission Control and it will appear here.'}
           </p>
         </Card>
       ) : (
@@ -114,9 +209,9 @@ export default function ConversationsPage() {
             <ConversationCard
               key={entry.cid}
               entry={entry}
-              active={entry.kind === 'active' && activeId === entry.agentId}
+              active={entry.kind === 'backend' ? currentSessionKey(entry.agentId) === entry.sessionKey : entry.kind === 'active' && activeId === entry.agentId}
               onOpen={() => openConversation(entry)}
-              onDelete={() => deleteConversation(entry)}
+              onDelete={() => removeConversation(entry)}
             />
           ))}
         </div>
@@ -126,6 +221,32 @@ export default function ConversationsPage() {
 }
 
 function ConversationCard({ entry, active, onOpen, onDelete }) {
+  const heading = entry.title || entry.name
+  const meta = entry.title ? [entry.name, entry.teamLabel].filter(Boolean).join(' / ') : entry.teamLabel
+  const [agentsOpen, setAgentsOpen] = useState(false)
+  const [subs, setSubs] = useState(null) // null = not loaded yet
+
+  // Lazy-load the agents that ran under this conversation (grouped from its runs).
+  useEffect(() => {
+    if (!agentsOpen || subs !== null || !entry.sessionKey) return
+    let alive = true
+    Api.chatRuns(entry.sessionKey).then((runs) => {
+      if (!alive) return
+      const out = []
+      const seen = new Set()
+      for (const r of runs || []) {
+        for (const c of r.calls || []) {
+          const k = String(c.name || c.key || '').toLowerCase()
+          if (!k || seen.has(k)) continue
+          seen.add(k)
+          out.push(c)
+        }
+      }
+      setSubs(out)
+    }).catch(() => { if (alive) setSubs([]) })
+    return () => { alive = false }
+  }, [agentsOpen, subs, entry.sessionKey])
+
   return (
     <Card className={cn(
       'group p-0 transition hover:border-[color:var(--accent)] hover:shadow-[0_18px_48px_rgba(25,88,80,0.12)]',
@@ -137,16 +258,45 @@ function ConversationCard({ entry, active, onOpen, onDelete }) {
         </div>
         <button onClick={onOpen} className="min-w-0 flex-1 text-left">
           <div className="flex items-center gap-2">
-            {entry.kind === 'saved' && <History className="h-3.5 w-3.5 shrink-0 text-[color:var(--text-quiet)]" />}
-            <h3 className="truncate text-sm font-semibold text-strong">{entry.name}</h3>
+            {(entry.kind === 'saved' || entry.kind === 'backend') && <History className="h-3.5 w-3.5 shrink-0 text-[color:var(--text-quiet)]" />}
+            <h3 className="truncate text-sm font-semibold text-strong">{heading}</h3>
             <span className="ml-auto shrink-0 text-xs text-[color:var(--text-quiet)]">{timeAgo(entry.ts)}</span>
           </div>
-          <div className="mt-1 text-[11px] font-semibold uppercase tracking-[0.14em] text-[color:var(--accent-strong)]">
-            {entry.teamLabel}
+          <div className="mt-1 flex items-center gap-2 text-[11px] font-semibold uppercase tracking-[0.14em] text-[color:var(--accent-strong)]">
+            <span className="truncate">{meta}</span>
+            {entry.count != null && <span className="shrink-0 rounded-full bg-[color:var(--accent-soft)] px-2 py-0.5 tracking-normal">{entry.count} msgs</span>}
           </div>
           <p className="mt-2 line-clamp-2 text-sm leading-6 text-muted">{entry.text || 'No messages yet'}</p>
         </button>
       </div>
+
+      {/* Agents that ran under this conversation — grouped here instead of as separate cards. */}
+      <div className="border-t border-[color:var(--border)] px-4 py-2">
+        <button
+          type="button"
+          onClick={() => setAgentsOpen((o) => !o)}
+          className="flex w-full items-center gap-2 text-left text-xs font-medium text-[color:var(--text-muted)] transition hover:text-[color:var(--accent-strong)]"
+        >
+          <Users className="h-3.5 w-3.5 shrink-0" />
+          <span>Agents in this conversation</span>
+          {subs && subs.length > 0 && (
+            <span className="rounded-full bg-[color:var(--accent-soft)] px-1.5 py-0.5 text-[10px] font-semibold text-[color:var(--accent-strong)]">{subs.length}</span>
+          )}
+          <ChevronDown className={cn('ml-auto h-4 w-4 transition-transform', agentsOpen && 'rotate-180')} />
+        </button>
+        {agentsOpen && (
+          <div className="mt-2 space-y-1.5">
+            {subs === null ? (
+              <div className="px-1 py-1 text-xs text-muted">Loading…</div>
+            ) : subs.length === 0 ? (
+              <div className="px-1 py-1 text-xs text-muted">No delegated agents recorded for this conversation.</div>
+            ) : (
+              subs.map((c, i) => <SubAgentRow key={(c.key || c.name || i) + ''} call={c} />)
+            )}
+          </div>
+        )}
+      </div>
+
       <div className="flex items-center justify-between border-t border-[color:var(--border)] px-4 py-3">
         <Button variant="secondary" size="sm" onClick={onOpen}>
           Open <ArrowRight className="h-4 w-4" />
@@ -163,6 +313,32 @@ function ConversationCard({ entry, active, onOpen, onDelete }) {
   )
 }
 
+// One delegated agent under a conversation — name + status, expands to its markdown output.
+function SubAgentRow({ call }) {
+  const [open, setOpen] = useState(false)
+  const status = call.status || 'done'
+  const hasOut = !!(call.output && String(call.output).trim())
+  return (
+    <div className="rounded-lg border border-[color:var(--border)] bg-[color:var(--surface-muted)]">
+      <button
+        type="button"
+        onClick={() => hasOut && setOpen((o) => !o)}
+        className={cn('flex w-full items-center gap-2 px-2.5 py-1.5 text-left', !hasOut && 'cursor-default')}
+      >
+        <span className="h-2 w-2 shrink-0 rounded-full" style={{ backgroundColor: subColor(status) }} />
+        <span className="min-w-0 flex-1 truncate text-xs font-semibold text-strong">{call.name || call.key || 'Agent'}</span>
+        <span className="shrink-0 text-[10px] font-bold uppercase tracking-wide" style={{ color: subColor(status) }}>{status}</span>
+        {hasOut && <ChevronDown className={cn('h-3.5 w-3.5 shrink-0 text-quiet transition-transform', open && 'rotate-180')} />}
+      </button>
+      {open && hasOut && (
+        <div className="max-h-72 overflow-y-auto border-t border-[color:var(--border)] px-2.5 py-2 text-[12px] leading-relaxed text-strong scrollbar-thin">
+          <Markdown content={call.output} />
+        </div>
+      )}
+    </div>
+  )
+}
+
 function timeAgo(ts) {
   if (!ts) return ''
   const s = Math.floor((Date.now() - ts) / 1000)
@@ -172,4 +348,16 @@ function timeAgo(ts) {
   const h = Math.floor(m / 60)
   if (h < 24) return h + 'h'
   return Math.floor(h / 24) + 'd'
+}
+
+function toMs(value) {
+  if (typeof value === 'number') return value
+  const parsed = Date.parse(value || '')
+  return Number.isFinite(parsed) ? parsed : 0
+}
+
+function normalizeSessionAgent(sessionKey, fallback) {
+  const parts = String(sessionKey || '').split(':')
+  if (parts[0] === 'agent' && parts[1]) return parts[1] === 'orchestrator' ? ORCH_ID : parts[1]
+  return fallback === 'orchestrator' ? ORCH_ID : (fallback || ORCH_ID)
 }

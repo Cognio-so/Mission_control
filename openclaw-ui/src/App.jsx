@@ -8,7 +8,7 @@ import ActivityPage from './pages/ActivityPage.jsx'
 import BoardsPage from './pages/BoardsPage.jsx'
 import BoardDetailPage from './pages/BoardDetailPage.jsx'
 import MarketplacePage from './pages/MarketplacePage.jsx'
-import PacksPage from './pages/PacksPage.jsx'
+import PluginsPage from './pages/PluginsPage.jsx'
 import ScheduledPage from './pages/ScheduledPage.jsx'
 import GatewaysPage from './pages/GatewaysPage.jsx'
 import SettingsPage from './pages/SettingsPage.jsx'
@@ -28,7 +28,7 @@ export default function App() {
         <Route path="/boards/:boardId" element={<BoardDetailPage />} />
         <Route path="/skills" element={<Navigate to="/skills/marketplace" replace />} />
         <Route path="/skills/marketplace" element={<MarketplacePage />} />
-        <Route path="/skills/packs" element={<PacksPage />} />
+        <Route path="/skills/plugins" element={<PluginsPage />} />
         <Route path="/gateways" element={<GatewaysPage />} />
         <Route path="/organization" element={<SettingsPage />} />
         <Route path="/settings" element={<SettingsPage />} />

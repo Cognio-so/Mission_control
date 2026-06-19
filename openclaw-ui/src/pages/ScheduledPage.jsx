@@ -104,7 +104,7 @@ function normalizeJob(job = {}) {
 function Stat({ label, value, icon: Icon }) {
   return (
     <Card className="flex items-center gap-3 p-4">
-      <div className="grid h-10 w-10 place-items-center rounded-lg bg-[#eef8f4] text-[#12524c]">
+      <div className="grid h-10 w-10 place-items-center rounded-lg bg-[color:var(--accent-soft)] text-[color:var(--accent-strong)]">
         <Icon className="h-5 w-5" />
       </div>
       <div>
@@ -119,7 +119,7 @@ function OutputPreview({ job }) {
   const text = job.latest.error || job.latest.output
   if (!text) {
     return (
-      <div className="rounded-lg border border-dashed border-[color:var(--border)] bg-[#fffaf0]/70 px-3 py-3 text-sm text-muted">
+      <div className="rounded-lg border border-dashed border-[color:var(--border)] bg-[color:var(--surface-muted)] px-3 py-3 text-sm text-muted">
         No output recorded for the latest run.
       </div>
     )
@@ -129,7 +129,7 @@ function OutputPreview({ job }) {
       'max-h-32 overflow-y-auto whitespace-pre-wrap rounded-lg border px-3 py-2 font-mono text-xs leading-relaxed scrollbar-thin',
       job.latest.error
         ? 'border-rose-200 bg-rose-50 text-rose-700'
-        : 'border-[#d8e6df] bg-[#f6f0e4] text-[#274844]',
+        : 'border-[color:var(--border)] bg-[color:var(--surface-muted)] text-[color:var(--text)]',
     )}>
       {text}
     </div>
@@ -313,7 +313,7 @@ export default function ScheduledPage() {
                 <Card className="overflow-hidden p-0">
                   <div className="flex flex-wrap items-start justify-between gap-4 border-b border-[color:var(--border)] px-5 py-4">
                     <div className="flex min-w-0 items-start gap-3">
-                      <div className="grid h-11 w-11 shrink-0 place-items-center rounded-lg bg-[linear-gradient(135deg,#45a895_0%,#0f4b49_100%)] text-[#fffaf0] shadow-sm">
+                      <div className="grid h-11 w-11 shrink-0 place-items-center rounded-lg text-white shadow-sm [background-image:var(--grad-brand)]">
                         <Clock className="h-5 w-5" />
                       </div>
                       <div className="min-w-0">
@@ -360,7 +360,7 @@ export default function ScheduledPage() {
 
                     <div>
                       {job.message && (
-                        <div className="mb-3 rounded-lg border border-[color:var(--border)] bg-[#fffaf0]/70 px-3 py-2">
+                        <div className="mb-3 rounded-lg border border-[color:var(--border)] bg-[color:var(--surface-muted)] px-3 py-2">
                           <div className="mb-1 text-[11px] font-semibold uppercase tracking-wide text-[color:var(--text-quiet)]">Message</div>
                           <div className="line-clamp-3 whitespace-pre-wrap text-sm text-strong">{job.message}</div>
                         </div>
@@ -378,7 +378,7 @@ export default function ScheduledPage() {
                       <div className="mb-2 text-xs font-semibold uppercase tracking-wide text-[color:var(--text-quiet)]">Recent runs</div>
                       <div className="grid gap-2 lg:grid-cols-3">
                         {job.runs.map((run) => (
-                          <div key={run.id} className="rounded-lg border border-[color:var(--border)] bg-[#fffaf0]/70 px-3 py-2 text-xs">
+                          <div key={run.id} className="rounded-lg border border-[color:var(--border)] bg-[color:var(--surface-muted)] px-3 py-2 text-xs">
                             <div className="flex items-center justify-between gap-2">
                               <Badge variant={statusTone(run.status)}>{run.status}</Badge>
                               <span className="text-muted">{formatDuration(run.durationMs)}</span>
@@ -410,7 +410,7 @@ function Field({ label, children }) {
 
 function Info({ icon: Icon, label, value }) {
   return (
-    <div className="rounded-lg border border-[color:var(--border)] bg-[#fffaf0]/70 px-3 py-2.5">
+    <div className="rounded-lg border border-[color:var(--border)] bg-[color:var(--surface-muted)] px-3 py-2.5">
       <div className="flex items-center gap-1.5 text-[11px] font-semibold uppercase tracking-wide text-[color:var(--text-quiet)]">
         <Icon className="h-3.5 w-3.5" /> {label}
       </div>

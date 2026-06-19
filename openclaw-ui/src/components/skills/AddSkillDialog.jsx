@@ -10,12 +10,12 @@ import { Input } from '../ui/input.jsx'
 import { Textarea } from '../ui/textarea.jsx'
 
 const MODES = [
-  { key: 'source', label: 'From source', icon: Link2, hint: 'Install from a Git repo / skill URL.' },
-  { key: 'file', label: 'From file', icon: FileCode, hint: 'Paste a skill file — the broker writes it into the gateway.' },
-  { key: 'describe', label: 'Describe', icon: Sparkles, hint: 'Describe what you want — Cognio generates the skill.' },
+  { key: 'source', label: 'From source', icon: Link2, hint: 'Install from a Git repo or URL.' },
+  { key: 'file', label: 'From file', icon: FileCode, hint: 'Paste a markdown/config file and the broker writes it into the workspace.' },
+  { key: 'describe', label: 'Describe', icon: Sparkles, hint: 'Describe what you want and the broker generates it.' },
 ]
 
-export function AddSkillDialog({ onClose, onAdded }) {
+export function AddSkillDialog({ kind = 'skill', onClose, onAdded }) {
   const [mode, setMode] = useState('source')
   const [url, setUrl] = useState('')
   const [name, setName] = useState('')
@@ -39,27 +39,28 @@ export function AddSkillDialog({ onClose, onAdded }) {
     try {
       const res = await Api.addSkill(payload)
       if (res && res.ok === false) {
-        setError(res.error || 'The broker could not add the skill.')
+        setError(res.error || 'The broker could not add the ' + kind + '.')
       } else {
-        setOk(res?.message || 'Skill submitted to Cognio.')
+        setOk(res?.message || titleCase(kind) + ' submitted.')
         onAdded?.()
         setTimeout(() => onClose(), 900)
       }
     } catch (e) {
-      setError(e.message || 'Add skill failed — the broker may not expose POST /skills/add yet.')
+      setError(e.message || 'Add ' + kind + ' failed. The broker may not expose the add endpoint yet.')
     } finally {
       setBusy(false)
     }
   }
 
   const activeHint = MODES.find((m) => m.key === mode)?.hint
+  const title = titleCase(kind)
 
   return (
     <Dialog open onOpenChange={(o) => !o && onClose()}>
       <DialogContent className="max-w-xl">
         <DialogHeader>
-          <DialogTitle>Add a skill</DialogTitle>
-          <DialogDescription>Add a capability to Cognio from a source, a file, or a description. {activeHint}</DialogDescription>
+          <DialogTitle>Add a {kind}</DialogTitle>
+          <DialogDescription>Add a {kind} from a source, a file, or a description. {activeHint}</DialogDescription>
         </DialogHeader>
 
         <div className="mt-4 grid grid-cols-3 gap-2">
@@ -77,20 +78,20 @@ export function AddSkillDialog({ onClose, onAdded }) {
         <div className="mt-4 space-y-3">
           {mode === 'source' && (
             <Field label="Source URL">
-              <Input value={url} onChange={(e) => setUrl(e.target.value)} placeholder="https://github.com/owner/skills/tree/main/my-skill" />
+              <Input value={url} onChange={(e) => setUrl(e.target.value)} placeholder={kind === 'plugin' ? 'https://github.com/owner/plugin-repo' : 'https://github.com/owner/skills/tree/main/my-skill'} />
             </Field>
           )}
           {mode === 'file' && (
             <>
-              <Field label="Skill name"><Input value={name} onChange={(e) => setName(e.target.value)} placeholder="my-skill" /></Field>
-              <Field label="Skill file content">
-                <Textarea value={content} onChange={(e) => setContent(e.target.value)} rows={7} placeholder={'---\nname: my-skill\ndescription: ...\n---\n\nInstructions…'} className="font-mono text-xs" />
+              <Field label={title + ' name'}><Input value={name} onChange={(e) => setName(e.target.value)} placeholder={kind === 'plugin' ? 'my-plugin' : 'my-skill'} /></Field>
+              <Field label={title + ' file content'}>
+                <Textarea value={content} onChange={(e) => setContent(e.target.value)} rows={7} placeholder={kind === 'plugin' ? '{\n  "name": "my-plugin"\n}' : '---\nname: my-skill\ndescription: ...\n---\n\nInstructions...'} className="font-mono text-xs" />
               </Field>
             </>
           )}
           {mode === 'describe' && (
-            <Field label="Describe the skill">
-              <Textarea value={prompt} onChange={(e) => setPrompt(e.target.value)} rows={5} placeholder="A skill that audits a website's on-page SEO and returns prioritized fixes." />
+            <Field label={'Describe the ' + kind}>
+              <Textarea value={prompt} onChange={(e) => setPrompt(e.target.value)} rows={5} placeholder={kind === 'plugin' ? 'A plugin that connects agents to our CRM.' : "A skill that audits a website's on-page SEO and returns prioritized fixes."} />
             </Field>
           )}
 
@@ -101,7 +102,7 @@ export function AddSkillDialog({ onClose, onAdded }) {
         <DialogFooter className="mt-5">
           <Button variant="secondary" onClick={onClose} disabled={busy}>Cancel</Button>
           <Button onClick={submit} disabled={!valid || busy}>
-            {busy ? <><Loader2 className="h-4 w-4 animate-spin" /> Adding…</> : 'Add skill'}
+            {busy ? <><Loader2 className="h-4 w-4 animate-spin" /> Adding...</> : 'Add ' + kind}
           </Button>
         </DialogFooter>
       </DialogContent>
@@ -116,4 +117,8 @@ function Field({ label, children }) {
       {children}
     </label>
   )
+}
+
+function titleCase(value) {
+  return String(value || '').slice(0, 1).toUpperCase() + String(value || '').slice(1)
 }

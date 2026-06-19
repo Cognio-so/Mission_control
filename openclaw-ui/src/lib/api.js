@@ -46,6 +46,22 @@ const unwrap = (data, key) => {
   return null
 }
 
+function messageText(value) {
+  if (value == null) return ''
+  if (typeof value === 'string') return value
+  if (typeof value === 'number' || typeof value === 'boolean') return String(value)
+  if (Array.isArray(value)) return value.map(messageText).filter(Boolean).join('')
+  if (typeof value === 'object') {
+    if (typeof value.text === 'string') return value.text
+    if (typeof value.content === 'string') return value.content
+    if (typeof value.output_text === 'string') return value.output_text
+    if (value.message) return messageText(value.message)
+    if (value.content) return messageText(value.content)
+    if (value.parts) return messageText(value.parts)
+  }
+  return ''
+}
+
 // loader(realFetch, demoData) — returns { data, source }.
 // source: 'broker' (live) | 'demo' (fallback on) | 'unavailable' (no endpoint, demo off)
 async function load(realFetch, demoData) {
@@ -58,9 +74,13 @@ async function load(realFetch, demoData) {
 }
 
 export const Api = {
-  // skills/packs are always the broker's REAL data — never hardcoded (empty demo list).
-  skills() { return load(async () => unwrap(await brokerGet('/skills/marketplace'), 'skills'), []) },
-  packs() { return load(async () => unwrap(await brokerGet('/skills/packs'), 'packs'), []) },
+  // Skills/plugins are always the broker's REAL data, never hardcoded demo catalog data.
+  skills() {
+    return load(async () => unwrap(await brokerGet('/skills'), 'skills'), [])
+  },
+  plugins() {
+    return load(async () => unwrap(await brokerGet('/plugins'), 'plugins'), [])
+  },
   boards() { return load(async () => unwrap(await brokerGet('/boards'), 'boards'), DEMO_BOARDS) },
   gateways() { return load(async () => unwrap(await brokerGet('/gateways'), 'gateways'), DEMO_GATEWAYS) },
   cron: {
@@ -136,10 +156,24 @@ export const Api = {
       return {
         id: m.id || 'h_' + i,
         role,
-        text: cleanChatText(typeof m.content === 'string' ? m.content : m.text || '', role),
+        text: cleanChatText(messageText(m.content) || messageText(m.text) || messageText(m.message), role),
         ts: typeof m.ts === 'number' ? m.ts : (m.created_at ? Date.parse(m.created_at) || 0 : 0),
       }
     }).filter((m) => m.role !== 'user' || m.text.trim())
+  },
+  // Server-side run history (graph + per-agent/subagent output) for a session — the
+  // cross-device source of truth. Returns [] if the broker doesn't expose it yet.
+  async chatRuns(sessionKey, days = 15) {
+    try {
+      const data = await brokerGet('/chat/runs?sessionKey=' + encodeURIComponent(sessionKey) + '&days=' + days)
+      return unwrap(data, 'runs') || []
+    } catch { return [] }
+  },
+  chatSessions() {
+    return brokerGet('/chat/sessions').then((data) => unwrap(data, 'sessions') || [])
+  },
+  deleteChatSession(sessionKey) {
+    return brokerSend('/chat/sessions?sessionKey=' + encodeURIComponent(sessionKey), 'DELETE')
   },
 
   // ---- Credentials / secrets (write-only; GET returns key names only, never values) ----
@@ -169,6 +203,30 @@ export const Api = {
     put(agentId, name, content) {
       return brokerSend('/agents/' + encodeURIComponent(agentId) + '/files/' + encodeURIComponent(name), 'PUT', { content })
     },
+  },
+  skillFiles(id) {
+    return brokerGet('/skills/' + encodeURIComponent(id) + '/files')
+  },
+  skillFile(id, path = 'SKILL.md') {
+    return brokerGet('/skills/' + encodeURIComponent(id) + '/file?path=' + encodeURIComponent(path))
+  },
+  capabilityFiles(kind, id) {
+    if (kind !== 'skill') {
+      return {
+        async list() { return [] },
+        async get() { return '' },
+      }
+    }
+    return {
+      async list() {
+        const data = await Api.skillFiles(id)
+        return unwrap(data, 'files') || []
+      },
+      async get(path) {
+        const data = await Api.skillFile(id, path)
+        return typeof data?.content === 'string' ? data.content : ''
+      },
+    }
   },
 }
 

@@ -85,16 +85,53 @@ export function reducer(s, a) {
       const t = { ...getT(s, aid), running: true }
       return {
         ...withT(s, aid, t),
-        timeline: s.timeline.concat({ id: rid(), kind: 'divider', text: a.title || 'run started' }),
+        // Stamp the run divider with the query + agent so the artifact can show a
+        // separate, labelled entry per query (run history). runId is filled in by
+        // 'run.tag' once the broker's /chat response returns it (for cross-device dedup).
+        timeline: s.timeline.concat({ id: rid(), kind: 'divider', text: a.title || 'run started', query: a.query || '', agent: aid, ts: Date.now(), runId: a.runId || null }),
       }
+    }
+    case 'run.tag': {
+      // Attach the broker runId to this agent's most recent (untagged) run divider, so a
+      // server-loaded copy of the same run dedups against it instead of duplicating.
+      const tl = [...s.timeline]
+      for (let i = tl.length - 1; i >= 0; i--) {
+        const it = tl[i]
+        if (it.kind === 'divider' && it.agent === aid && !it.runId && !/^run (complete|failed|stopped)$/i.test(String(it.text || '').trim())) {
+          tl[i] = { ...it, runId: a.runId }
+          return { ...s, timeline: tl }
+        }
+      }
+      return s
+    }
+    case 'timeline.merge': {
+      // Merge server-stored runs in, skipping any whose runId is already present.
+      const have = new Set(s.timeline.filter((t) => t.kind === 'divider' && t.runId).map((t) => t.runId))
+      const add = []
+      for (const r of a.runs || []) if (r.runId && !have.has(r.runId)) add.push(...(r.items || []))
+      return add.length ? { ...s, timeline: s.timeline.concat(add) } : s
     }
     case 'run.end': {
       const current = getT(s, aid)
-      if (!current.running && !current.curAssistant) return s
-      const t = { ...current, running: false, curAssistant: null }
+      // A user stop always proceeds (even with no running parent) so it can settle
+      // background subs and drop the divider.
+      if (!current.running && !current.curAssistant && a.status !== 'stopped') return s
+      // Drop any trailing empty assistant placeholder. A fully-delegated run can end
+      // without the parent ever streaming its own text; leaving the empty bubble would
+      // keep the UI stuck "working" forever (awaitingAnswer never clears).
+      let messages = current.messages
+      while (messages.length && messages[messages.length - 1].role === 'assistant' && !String(messages[messages.length - 1].text || '').trim()) {
+        messages = messages.slice(0, -1)
+      }
+      const t = { ...current, running: false, curAssistant: null, messages }
+      // On an explicit user stop, settle still-running delegated subs right away so the
+      // spinner/map clears instantly (the broker cascade-aborts them server-side too).
+      const base = a.status === 'stopped'
+        ? s.timeline.map((it) => (it.kind === 'sub' && it.badge !== 'done' && it.badge !== 'error' ? { ...it, badge: 'done' } : it))
+        : s.timeline
       return {
         ...withT(s, aid, t),
-        timeline: s.timeline.concat({ id: rid(), kind: 'divider', text: a.status === 'error' ? 'run failed' : 'run complete' }),
+        timeline: base.concat({ id: rid(), kind: 'divider', text: a.status === 'error' ? 'run failed' : a.status === 'stopped' ? 'run stopped' : 'run complete' }),
       }
     }
     case 'user': {
@@ -158,13 +195,28 @@ export function reducer(s, a) {
         timeline: s.timeline.map((t) => (t.id === a.id ? { ...t, status: a.status, pre: a.pre != null ? a.pre : t.pre } : t)),
       }
     case 'sub.spawn': {
+      const ex = s.subIndex[a.key]
+      if (ex) {
+        return {
+          ...s,
+          timeline: s.timeline.map((t) =>
+            t.id === ex
+              ? { ...t,
+                  title: a.name && (!t.title || t.title === t.key) ? a.name : t.title,
+                  parent: a.parent || t.parent,
+                  sub: a.task || t.sub,
+                  badge: a.status || t.badge }
+              : t,
+          ),
+        }
+      }
       const id = rid()
       return {
         ...s,
         subIndex: { ...s.subIndex, [a.key]: id },
         timeline: s.timeline.concat({
           id, kind: 'sub', key: a.key, title: a.name || a.key, icon: a.icon,
-          parent: a.parent, sub: a.task || '', badge: 'queued', stream: '',
+          parent: a.parent, sub: a.task || '', badge: a.status || 'queued', stream: '',
         }),
       }
     }
@@ -174,7 +226,16 @@ export function reducer(s, a) {
         return {
           ...s,
           timeline: s.timeline.map((t) =>
-            t.id === ex ? { ...t, badge: 'running', stream: a.replace ? a.text : (t.stream || '') + a.text } : t,
+            t.id === ex
+              ? { ...t,
+                  // New output means the agent is alive: recover from a stale/transient
+                  // 'error' back to 'running'. Only a real 'done' final stays terminal.
+                  badge: t.badge === 'done' ? 'done' : 'running',
+                  title: a.name && (!t.title || t.title === t.key) ? a.name : t.title,
+                  // On replace, keep whichever text is longer — a terminal 'final' carrying
+                  // the full output replaces streamed deltas, but a short final can't wipe them.
+                  stream: a.replace ? (String(a.text || '').length >= String(t.stream || '').length ? a.text : t.stream) : (t.stream || '') + a.text }
+              : t,
           ),
         }
       }
@@ -183,7 +244,7 @@ export function reducer(s, a) {
         ...s,
         subIndex: { ...s.subIndex, [a.key]: id },
         timeline: s.timeline.concat({
-          id, kind: 'sub', key: a.key, title: a.key, parent: a.parent,
+          id, kind: 'sub', key: a.key, title: a.name || a.key, parent: a.parent,
           sub: 'delegated run', badge: 'running', stream: a.text,
         }),
       }

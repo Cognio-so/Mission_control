@@ -12,7 +12,7 @@ export function DashboardLayout() {
         <Topbar />
         <div className="mx-auto flex min-h-0 w-full flex-1 overflow-hidden">
           <Sidebar />
-          <main className="min-h-0 flex-1 overflow-y-auto bg-[linear-gradient(135deg,#fbf5e8_0%,#f6efdf_44%,#e5f4ee_100%)]">
+          <main className="app-bg min-h-0 flex-1 overflow-y-auto">
             <AnimatePresence mode="wait">
               <motion.div
                 key={location.pathname.split('/').slice(0, 3).join('/')}

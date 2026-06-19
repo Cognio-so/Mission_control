@@ -2,9 +2,43 @@
 <html lang="en">
   <head>
     <meta charset="UTF-8" />
-    <link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><text y='.9em' font-size='90'>🦀</text></svg>" />
+    <link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><rect width='100' height='100' rx='26' fill='%230f4b49'/><path d='M34 40 L66 31 M34 40 L60 69' stroke='%234fd1b5' stroke-width='5' fill='none' opacity='.55'/><circle cx='34' cy='40' r='9' fill='%234fd1b5'/><circle cx='66' cy='31' r='7' fill='%23a9efe0'/><circle cx='60' cy='69' r='8' fill='%232f9e8a'/></svg>" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <meta name="theme-color" content="#0f4b49" media="(prefers-color-scheme: light)" />
+    <meta name="theme-color" content="#0a1413" media="(prefers-color-scheme: dark)" />
     <title>Cognio · Mission Control</title>
+
+    <!-- Apply the saved/system theme before first paint to avoid a flash. -->
+    <script>
+      (function () {
+        try {
+          var key = 'oc_theme';
+          var mql = window.matchMedia('(prefers-color-scheme: dark)');
+          var apply = function () {
+            var t = localStorage.getItem(key);
+            t = t === 'light' || t === 'dark' || t === 'system' ? t : 'system';
+            var dark = t === 'dark' || (t === 'system' && mql.matches);
+            var root = document.documentElement;
+            root.classList.toggle('dark', dark);
+            root.style.colorScheme = dark ? 'dark' : 'light';
+            root.dataset.theme = dark ? 'dark' : 'light';
+          };
+          apply();
+          if (mql.addEventListener)
+            mql.addEventListener('change', function () {
+              var t = localStorage.getItem(key) || 'system';
+              if (t === 'system') apply();
+            });
+        } catch (e) {}
+      })();
+    </script>
+
+    <link rel="preconnect" href="https://fonts.googleapis.com" />
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+    <link
+      href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=Space+Grotesk:wght@400;500;600;700&display=swap"
+      rel="stylesheet"
+    />
   </head>
   <body>
     <div id="root"></div>

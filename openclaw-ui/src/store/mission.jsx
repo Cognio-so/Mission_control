@@ -27,6 +27,7 @@ const ACTIVE_KEY = 'oc_active_v1'
 const ACTIVE_DEFAULT_KEY = 'mc_main_default_v2'
 const SESSIONS_KEY = 'oc_sessions_v1'
 const SAVED_KEY = 'oc_saved_v1'
+const TIMELINE_KEY = 'oc_timeline_v1'
 
 function loadSavedChats() {
   try {
@@ -35,6 +36,12 @@ function loadSavedChats() {
   } catch {
     return []
   }
+}
+
+function sessionAgentId(sessionKey, fallback = ORCH_ID) {
+  const parts = String(sessionKey || '').split(':')
+  if (parts[0] === 'agent' && parts[1]) return parts[1] === 'orchestrator' ? ORCH_ID : parts[1]
+  return fallback === 'orchestrator' ? ORCH_ID : (fallback || ORCH_ID)
 }
 
 function loadSessionOverrides() {
@@ -82,6 +89,35 @@ function saveThreads(threads) {
   } catch { /* quota / disabled — ignore */ }
 }
 
+// Persist the run timeline (graph + per-query runs + activity) so it survives a refresh.
+function loadTimeline() {
+  try {
+    const parsed = JSON.parse(localStorage.getItem(TIMELINE_KEY) || '{}')
+    let timeline = Array.isArray(parsed?.timeline) ? parsed.timeline : []
+    const subIndex = parsed?.subIndex && typeof parsed.subIndex === 'object' ? parsed.subIndex : {}
+    if (!timeline.length) return { timeline: [], subIndex: {} }
+    // A sub can't still be "running" across a reload — settle it so nothing shows live.
+    timeline = timeline.map((t) => (t.kind === 'sub' && (t.badge === 'running' || t.badge === 'queued') ? { ...t, badge: 'done' } : t))
+    // Close the last run if the session ended mid-run, so it restores as complete (not live).
+    const last = timeline[timeline.length - 1]
+    const isClose = last?.kind === 'divider' && /^run (complete|failed|stopped)$/i.test(String(last.text || '').trim())
+    if (!isClose) timeline = timeline.concat({ id: 'restore_close', kind: 'divider', text: 'run complete' })
+    return { timeline, subIndex }
+  } catch {
+    return { timeline: [], subIndex: {} }
+  }
+}
+
+function saveTimeline(timeline, subIndex) {
+  try {
+    const trimmed = (timeline || []).slice(-400)
+    const ids = new Set(trimmed.map((t) => t.id))
+    const idx = {}
+    for (const [k, v] of Object.entries(subIndex || {})) if (ids.has(v)) idx[k] = v
+    localStorage.setItem(TIMELINE_KEY, JSON.stringify({ timeline: trimmed, subIndex: idx }))
+  } catch { /* quota / disabled — ignore */ }
+}
+
 const MissionContext = createContext(null)
 export const useMission = () => useContext(MissionContext)
 
@@ -100,11 +136,16 @@ export function MissionProvider({ children }) {
       return saved || ORCH_ID
     } catch { return ORCH_ID }
   })
-  const [state, dispatch] = useReducer(reducer, initial, (init) => ({
-    ...init,
-    threads: loadThreads(), // resume the conversation from last session
-    conn: settings.demo ? 'demo' : settings.base ? 'connecting' : 'off',
-  }))
+  const [state, dispatch] = useReducer(reducer, initial, (init) => {
+    const tl = loadTimeline() // resume the run history (graph + per-query runs) too
+    return {
+      ...init,
+      threads: loadThreads(), // resume the conversation from last session
+      timeline: tl.timeline,
+      subIndex: tl.subIndex,
+      conn: settings.demo ? 'demo' : settings.base ? 'connecting' : 'off',
+    }
+  })
   const [agentsLoading, setAgentsLoading] = useState(false)
   const [agentsError, setAgentsError] = useState('')
   const [agentStatus, setAgentStatus] = useState(null)
@@ -119,9 +160,17 @@ export function MissionProvider({ children }) {
   const sessionMapRef = useRef({})
   const loadedRef = useRef(false)
   const historyLoadedRef = useRef(new Set())
+  const wasRunningRef = useRef(false)
 
   // Persist conversations + active agent + session overrides so a refresh resumes.
   useEffect(() => { saveThreads(state.threads) }, [state.threads])
+  // Persist the run timeline too (debounced — it changes rapidly while streaming).
+  const tlSaveRef = useRef(0)
+  useEffect(() => {
+    clearTimeout(tlSaveRef.current)
+    tlSaveRef.current = setTimeout(() => saveTimeline(state.timeline, state.subIndex), 800)
+    return () => clearTimeout(tlSaveRef.current)
+  }, [state.timeline, state.subIndex])
   useEffect(() => { try { localStorage.setItem(ACTIVE_KEY, activeId) } catch { /* ignore */ } }, [activeId])
   useEffect(() => { try { localStorage.setItem(SESSIONS_KEY, JSON.stringify(sessionOverrides)) } catch { /* ignore */ } }, [sessionOverrides])
   useEffect(() => { try { localStorage.setItem(SAVED_KEY, JSON.stringify(savedChats)) } catch { /* ignore */ } }, [savedChats])
@@ -228,6 +277,38 @@ export function MissionProvider({ children }) {
   )
   useEffect(() => { loadHistory(activeId) }, [activeId, loadHistory])
 
+  // Load the server-stored run history (graph + subagent output) for a session and merge
+  // it into the timeline (deduped by runId). This is what makes the run history cross-device;
+  // it gracefully no-ops if the broker doesn't expose /chat/runs (returns []).
+  const runsLoadedRef = useRef(new Set())
+  const loadRunHistory = useCallback(
+    async (agentId) => {
+      if (settings.demo || !settings.base) return
+      const agent = agentsById[agentId]
+      if (!agent && agentId !== ORCH_ID) return
+      const sk = currentSessionKey(agentId)
+      if (runsLoadedRef.current.has(sk)) return
+      runsLoadedRef.current.add(sk)
+      try {
+        const runs = await Api.chatRuns(sk)
+        if (!runs || !runs.length) return
+        const groups = runs.map((r) => {
+          const items = [{ id: r.runId, kind: 'divider', text: r.query || 'run', query: r.query || '', agent: r.agentId || agentId, ts: r.startedAt || 0, runId: r.runId }]
+          for (const c of r.calls || []) {
+            items.push({ id: 'srv_' + r.runId + '_' + c.key, kind: 'sub', key: c.key, title: c.name || c.key, parent: r.agentId || agentId, sub: c.role || c.kind || 'Delegated task', badge: c.status || 'done', stream: c.output || '' })
+          }
+          items.push({ id: 'srvend_' + r.runId, kind: 'divider', text: r.status === 'error' ? 'run failed' : r.status === 'stopped' ? 'run stopped' : 'run complete' })
+          return { runId: r.runId, items }
+        })
+        dispatch({ type: 'timeline.merge', runs: groups })
+      } catch {
+        runsLoadedRef.current.delete(sk) // allow a later retry
+      }
+    },
+    [settings, agentsById, currentSessionKey],
+  )
+  useEffect(() => { loadRunHistory(activeId) }, [activeId, loadRunHistory])
+
   const catchUpHistory = useCallback(
     async (agentId) => {
       if (settings.demo || !settings.base) return
@@ -256,6 +337,23 @@ export function MissionProvider({ children }) {
     return () => {
       window.clearTimeout(initial)
       window.clearInterval(timer)
+    }
+  }, [anyRunning, state.threads, settings.demo, settings.base, catchUpHistory])
+
+  useEffect(() => {
+    if (!wasRunningRef.current || anyRunning || settings.demo || !settings.base) {
+      wasRunningRef.current = anyRunning
+      return
+    }
+    const ids = Object.entries(state.threads)
+      .filter(([, t]) => Array.isArray(t?.messages) && t.messages.length > 0)
+      .map(([id]) => id)
+    const first = window.setTimeout(() => ids.forEach((id) => catchUpHistory(id)), 700)
+    const second = window.setTimeout(() => ids.forEach((id) => catchUpHistory(id)), 2400)
+    wasRunningRef.current = anyRunning
+    return () => {
+      window.clearTimeout(first)
+      window.clearTimeout(second)
     }
   }, [anyRunning, state.threads, settings.demo, settings.base, catchUpHistory])
 
@@ -323,6 +421,55 @@ export function MissionProvider({ children }) {
     if (id) dispatch({ type: 'reset.thread', agent: id })
   }, [])
 
+  const openBackendSession = useCallback(
+    async (session) => {
+      const rawKey = String(session?.sessionKey || '')
+      if (!rawKey) return false
+      const id = sessionAgentId(rawKey, session?.agentId)
+      const sessionKey = rawKey.startsWith('agent:') ? rawKey : formatSessionKey(id, rawKey)
+      const curKey = currentSessionKey(id)
+      if (curKey !== sessionKey) archiveCurrent(id)
+      setSessionOverrides((o) => ({ ...o, [id]: sessionKey }))
+      setActiveId(id)
+      try {
+        const messages = await Api.chatHistory(sessionKey)
+        historyLoadedRef.current.add(sessionKey)
+        dispatch({ type: 'thread.restore', agent: id, messages: (messages || []).map((m) => ({ ...m, streaming: false })) })
+        return true
+      } catch (err) {
+        historyLoadedRef.current.delete(sessionKey)
+        dispatch({ type: 'node', node: { cls: 'error', head: 'Conversation load failed', sub: err.message || String(err) } })
+        return false
+      }
+    },
+    [currentSessionKey, archiveCurrent],
+  )
+
+  const deleteBackendSession = useCallback(
+    async (sessionKey) => {
+      const key = String(sessionKey || '')
+      if (!key) return false
+      try {
+        await Api.deleteChatSession(key)
+        const id = sessionAgentId(key)
+        historyLoadedRef.current.delete(key)
+        setSavedChats((prev) => prev.filter((c) => c.sessionKey !== key))
+        setSessionOverrides((prev) => {
+          if (prev[id] !== key) return prev
+          const next = { ...prev }
+          delete next[id]
+          return next
+        })
+        if (currentSessionKey(id) === key) dispatch({ type: 'reset.thread', agent: id })
+        return true
+      } catch (err) {
+        dispatch({ type: 'node', node: { cls: 'error', head: 'Conversation delete failed', sub: err.message || String(err) } })
+        return false
+      }
+    },
+    [currentSessionKey],
+  )
+
   useEffect(() => {
     if (clientRef.current) { clientRef.current.close(true); clientRef.current = null }
     if (settings.demo) { dispatch({ type: 'conn', status: 'demo' }); return }
@@ -384,6 +531,30 @@ export function MissionProvider({ children }) {
       }
     },
     [state, activeId, settings, agents, agentsById, currentSessionKey],
+  )
+
+  // Stop a run: soft-stop the UI immediately (clears the spinner/map and settles any
+  // background subs), then ask the broker to cascade-abort that session + its subtree.
+  const stopRun = useCallback(
+    async (toId) => {
+      const id = toId || activeId
+      const sessionKey = currentSessionKey(id)
+      dispatch({ type: 'run.end', agent: id, status: 'stopped' })
+      if (settings.demo || !settings.base || !clientRef.current) return
+      try { await clientRef.current.stopRun({ sessionKey }) } catch { /* logged in raw; soft stop already applied */ }
+    },
+    [activeId, settings.demo, settings.base, currentSessionKey],
+  )
+
+  // Panic stop: clear every running thread in the UI and tell the broker to abort all.
+  const stopAll = useCallback(
+    async () => {
+      const running = Object.entries(state.threads).filter(([, t]) => t.running).map(([aid]) => aid)
+      for (const aid of running.length ? running : [ORCH_ID]) dispatch({ type: 'run.end', agent: aid, status: 'stopped' })
+      if (settings.demo || !settings.base || !clientRef.current) return
+      try { await clientRef.current.stopRun({ all: true }) } catch { /* logged in raw */ }
+    },
+    [state.threads, settings.demo, settings.base],
   )
 
   const reconnect = useCallback(() => {
@@ -475,8 +646,8 @@ export function MissionProvider({ children }) {
     settings, agents, agentsById, orchestrator: orchestrator || fallbackOrchestrator(), roster, managed, teams,
     activeId, setActiveId, state, dispatch, anyRunning,
     agentsLoading, agentsError, agentStatus, agentSaving,
-    loadBrokerAgents, sendText, reconnect, clearThread, saveAgent, deleteAgent,
-    newChat, currentSessionKey, savedChats, resumeChat, deleteConversation,
+    loadBrokerAgents, sendText, stopRun, stopAll, reconnect, clearThread, saveAgent, deleteAgent,
+    newChat, currentSessionKey, savedChats, resumeChat, deleteConversation, openBackendSession, deleteBackendSession,
     getThread: (id) => getT(state, id),
   }
 

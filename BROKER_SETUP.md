@@ -473,13 +473,46 @@ Cron job body:
 }
 ```
 
+Skills and plugins:
+
+```text
+GET    /skills
+GET    /skills/:id/files
+GET    /skills/:id/file?path=SKILL.md
+POST   /skills/add
+
+GET    /plugins
+```
+
+Rules:
+
+```text
+- GET /skills returns all live skills from the broker, including bundled
+  metadata plus user-installed skills merged from disk.
+- Skill rows should include:
+  {id, name, category, summary, status, enabled, sourceUrl, readable}
+- The frontend defaults to status:"installed", with an All toggle for bundled
+  skills too.
+- Do not return skill packs; the frontend no longer has a Packs page.
+- GET /skills/:id/files returns:
+  {id, readable, files:[{path,size}]}
+- GET /skills/:id/file?path=<path> returns:
+  {path, content}
+- readable:false means the skill is bundled in the OpenClaw image; frontend
+  shows metadata only.
+- POST /skills/add should accept:
+  {type:"source", url}
+  {type:"file", name, content}
+  {type:"describe", prompt}
+- GET /plugins returns:
+  {count, enabled, plugins:[{id, enabled, origin, startup, rootDir, manifestPath}]}
+- Plugins are read-only in the frontend unless /plugins/add is implemented
+  later.
+```
+
 Other UI routes:
 
 ```text
-GET    /skills/marketplace
-GET    /skills/packs
-POST   /skills/marketplace/:id/install
-POST   /skills/add
 GET    /boards
 POST   /boards
 GET    /boards/:id
@@ -991,4 +1024,3 @@ Recheck:
 curl -I https://DASHBOARD_DOMAIN/
 curl -s https://DASHBOARD_DOMAIN/api/healthz
 ```
-
